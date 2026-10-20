@@ -254,6 +254,19 @@ VideoAdGuard
 
 本插件仅用于学习和研究目的，不得用于任何商业或非法用途。使用本插件所产生的一切后果，与作者和插件开发者无关。
 
+---
+
+## 需要一个能落地 AI 能力的开发者？
+
+VideoAdGuard 里的「用大模型判断这段是不是广告」是同一种活：把模型接进真实业务里，
+而不是做 demo。我做 AI 应用全栈——LLM 接入、实时多人系统、支付与订阅、部署运维，一个人交付完整链路。
+
+- [服务目录与作品集](https://requirement-diagnoser.tangziye2.workers.dev/go?s=gh-service-videoadguard&u=https%3A%2F%2Fzerotang-studio.pages.dev%2F)
+- [接单行情报告](https://requirement-diagnoser.tangziye2.workers.dev/go?s=gh-market-videoadguard&u=https%3A%2F%2Fzerotang-studio.pages.dev%2Fmarket.html):438 个真实在招项目的价格分布
+- [需求诊断台](https://requirement-diagnoser.tangziye2.workers.dev/go?s=gh-diagnoser-videoadguard&u=https%3A%2F%2Frequirement-diagnoser.tangziye2.workers.dev%2F):贴一段需求，30 秒出可行性、方案与报价区间
+
+<!-- freelancing -->
+
 ## 许可证
 
 本项目采用GPLv2许可证开源。
