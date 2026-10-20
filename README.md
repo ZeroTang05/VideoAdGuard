@@ -1,5 +1,8 @@
 # VideoAdGuard - B站视频植入广告检测器
 
+> **Looking for the English version? See [README.en.md](./README.en.md).**
+> VideoAdGuard detects embedded ads inside Bilibili videos with an LLM and lets you skip them.
+
 VideoAdGuard 是一个基于大语言模型的B站视频植入广告检测工具，能够自动识别B站视频中的植入广告内容，并提供跳过广告的功能。
 
 如果你觉得这个插件有用，请给项目点个Star⭐支持一下！
@@ -221,7 +224,7 @@ VideoAdGuard
 
 1. 克隆本仓库到本地：
    ```bash
-   git clone https://github.com/Warma10032/VideoAdGuard.git
+   git clone https://github.com/ZeroTang05/VideoAdGuard.git
    cd VideoAdGuard
    ```
 2. 安装依赖：
