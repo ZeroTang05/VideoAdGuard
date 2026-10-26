@@ -18,7 +18,7 @@ export function resolveLLMSettings(settings: StoredLLMSettings): ResolvedLLMSett
 }
 
 function requireExplicitProvider(provider: StoredLLMSettings['provider']): LLMProvider {
-  if (provider === 'openai' || provider === 'anthropic' || provider === 'custom_fetch') {
+  if (provider === 'openai' || provider === 'anthropic' || provider === 'custom_fetch' || provider === 'system_one') {
     return provider;
   }
   throw new Error('未设置SDK类型，请在设置中显式选择后重试');
@@ -31,6 +31,10 @@ export function buildApiUrl(provider: LLMProvider, baseUrl: string): string {
   }
 
   switch (provider) {
+    case 'system_one':
+      return normalizedBaseUrl.endsWith('/v1')
+        ? `${normalizedBaseUrl}/systemone`
+        : `${normalizedBaseUrl}/v1/systemone`;
     case 'anthropic':
       return normalizedBaseUrl.endsWith('/v1')
         ? `${normalizedBaseUrl}/messages`
@@ -81,6 +85,8 @@ function resolveBaseUrl(settings: StoredLLMSettings, provider: LLMProvider): str
 
 function normalizeBaseUrl(apiUrl: string, provider: LLMProvider): string {
   switch (provider) {
+    case 'system_one':
+      return trimSuffixes(apiUrl, ['/systemone']);
     case 'anthropic':
       return trimSuffixes(apiUrl, ['/v1/messages', '/messages']);
     case 'custom_fetch':

@@ -43,6 +43,7 @@ interface LLMInvokeMessage extends BaseMessage {
     responseFormat?: 'text' | 'json';
     maxTokens?: number;
     temperature?: number;
+    task?: LLMInvokePayload['task'];
   };
 }
 
@@ -207,6 +208,7 @@ class LLMInvokeHandler {
           userPrompt: payload.userPrompt,
           responseFormat: payload.responseFormat === 'text' ? 'text' : 'json',
           maxTokens: typeof payload.maxTokens === 'number' ? payload.maxTokens : 1024,
+          task: payload.task,
         },
         storedSettings
       );

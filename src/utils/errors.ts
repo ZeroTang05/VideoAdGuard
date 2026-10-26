@@ -199,7 +199,7 @@ export function normalizeErrorForUser(error: unknown, context: UserErrorContext 
     return '模型不存在或当前接口不支持该模型，请检查模型名称';
   }
 
-  if (includesAny(text, ['context length', 'maximum context length', 'prompt is too long', 'token limit', 'too many tokens'])) {
+  if (includesAny(text, ['max_tokens_exceeded', 'context length', 'maximum context length', 'prompt is too long', 'token limit', 'too many tokens'])) {
     return '输入内容过长，请减少内容后重试';
   }
 

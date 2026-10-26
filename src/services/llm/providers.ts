@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { createHttpError } from '../../utils/errors';
 import { resolveLLMSettings } from './config';
+import { invokeWithSystemOne } from './system-one';
 import {
   LLMInvokePayload,
   LLMInvokeResult,
@@ -38,6 +39,8 @@ export class LLMGateway {
     }
 
     switch (settings.provider) {
+      case 'system_one':
+        return invokeWithSystemOne(payload, settings);
       case 'anthropic':
         return this.invokeWithAnthropic(payload, settings);
       case 'custom_fetch':

@@ -6,6 +6,7 @@ import { AudioService } from './services/audio';
 import { CacheService } from './services/cache';
 import { CloudCacheService } from './services/cloud-cache';
 import { normalizeErrorForUser } from './utils/errors';
+import { isBilibiliVideoPage } from './utils/video-page';
 
 // 新增：广告片段接口，用于支持交互状态
 interface AdSegment {
@@ -401,7 +402,7 @@ class AdDetector {
             hasAdCondition = true;
             const ad_text = "置顶评论：" + topComment + " 链接标题：" + jumpUrlMessage["链接标题"];
             try {
-              const response = await AIService.extractProductName(ad_text);
+              const response = await AIService.extractProductName(ad_text, String(jumpUrlMessage['链接标题']));
               good_name.push(response);
               console.log('【VideoAdGuard】限制模式：成功提取商品名称:', response);
             } catch (error) {
@@ -1326,7 +1327,9 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
 });
 
 // 页面加载监听：页面加载完成后执行
-window.addEventListener('load', () => AdDetector.analyze());
+window.addEventListener('load', () => {
+  if (isBilibiliVideoPage(location.href)) AdDetector.analyze();
+});
 
 // 添加 URL 变化监听
 let lastUrl = location.href;
@@ -1335,13 +1338,13 @@ let lastUrl = location.href;
 new MutationObserver(() => {
   const url = location.href;
   if (url !== lastUrl) {
-    const currentBvid = AdDetector.getBvidFromUrl(url);
-    const previousBvid = AdDetector.getBvidFromUrl(lastUrl);
+    const currentBvid = isBilibiliVideoPage(url) ? AdDetector.getBvidFromUrl(url) : null;
+    const previousBvid = isBilibiliVideoPage(lastUrl) ? AdDetector.getBvidFromUrl(lastUrl) : null;
 
     lastUrl = url;
 
     // 只有当BV号发生变化时才触发检测逻辑
-    if (currentBvid !== previousBvid) {
+    if (currentBvid && currentBvid !== previousBvid) {
       console.log('【VideoAdGuard】URL changed with different BV:', url, 'Previous BV:', previousBvid, 'Current BV:', currentBvid);
       AdDetector.analyze();
     } else {

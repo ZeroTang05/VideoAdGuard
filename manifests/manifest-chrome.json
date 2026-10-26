@@ -37,6 +37,7 @@
     {
       "matches": [
         "*://*.bilibili.com/video/*",
+        "*://*.bilibili.com/festival/*",
         "*://*.bilibili.com/list/watchlater*"
       ],
       "js": [

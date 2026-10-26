@@ -5,6 +5,8 @@ import { buildApiUrl, resolveLLMSettings } from './services/llm/config';
 import { LLMProvider, StoredLLMSettings } from './services/llm/types';
 import { normalizeErrorForUser } from './utils/errors';
 import { DEBUG_MODE_STORAGE_KEY } from './utils/logger';
+import { isBilibiliVideoPage } from './utils/video-page';
+import { findSystemOnePreset, SYSTEM_ONE_PRESETS } from './services/llm/system-one-presets';
 
 interface BaseUrlPreset {
   name: string;
@@ -21,11 +23,15 @@ interface SDKPreset {
 const SDK_OPTIONS: SDKPreset[] = [
   { value: 'openai', label: 'OpenAI 兼容' },
   { value: 'anthropic', label: 'Anthropic 兼容' },
+  { value: 'system_one', label: 'System One' },
   { value: 'custom_fetch', label: '自定义 Fetch' },
 ];
 
 const SDK_PRESETS: Record<LLMProvider, BaseUrlPreset[]> = {
+  system_one: SYSTEM_ONE_PRESETS,
   openai: [
+    { name: 'Vercel AI Gateway', baseUrl: 'https://ai-gateway.vercel.sh/v1', actionLabel: '控制台', actionUrl: 'https://vercel.com/ai-gateway' },
+    { name: 'OpenCode Zen', baseUrl: 'https://opencode.ai/inference/openai/v1', actionLabel: '控制台', actionUrl: 'https://opencode.ai/auth' },
     { name: '智谱 AI', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', actionLabel: '注册', actionUrl: 'https://www.bigmodel.cn/glm-coding?ic=NZ1MQISIX0' },
     { name: '智谱 Coding Plan', baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4 ', actionLabel: '注册', actionUrl: 'https://www.bigmodel.cn/glm-coding?ic=NZ1MQISIX0' },
     { name: 'MiniMax', baseUrl: 'https://api.minimaxi.com/v1', actionLabel: '注册', actionUrl: 'https://platform.minimaxi.com/subscribe/token-plan?code=FapfOonxo7&source=link' },
@@ -51,6 +57,8 @@ const SDK_PRESETS: Record<LLMProvider, BaseUrlPreset[]> = {
     { name: 'Requesty API', baseUrl: 'https://router.requesty.ai/v1', actionLabel: '注册', actionUrl: 'https://app.requesty.ai/join?ref=d9bb6cf2' },
   ],
   anthropic: [
+    { name: 'Vercel AI Gateway', baseUrl: 'https://ai-gateway.vercel.sh', actionLabel: '控制台', actionUrl: 'https://vercel.com/ai-gateway' },
+    { name: 'OpenCode Zen', baseUrl: 'https://opencode.ai/inference/anthropic/v1', actionLabel: '控制台', actionUrl: 'https://opencode.ai/auth' },
     { name: '智谱 AI', baseUrl: 'https://open.bigmodel.cn/api/anthropic', actionLabel: '注册', actionUrl: 'https://www.bigmodel.cn/glm-coding?ic=NZ1MQISIX0' },
     { name: 'MiniMax', baseUrl: 'https://api.minimaxi.com/anthropic', actionLabel: '注册', actionUrl: 'https://platform.minimaxi.com/subscribe/token-plan?code=FapfOonxo7&source=link' },
     { name: 'Anthropic', baseUrl: 'https://api.anthropic.com', actionLabel: '注册', actionUrl: 'https://console.anthropic.com/settings/keys' },
@@ -184,6 +192,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     apiKeyInput.value = apiKeysByBaseUrl[activeBaseUrlKey] || '';
     modelInput.value = modelsByBaseUrl[activeBaseUrlKey] || '';
+    if (getSelectedProvider() === 'system_one' && !modelInput.value) {
+      modelInput.value = findSystemOnePreset(baseUrlInput.value)?.defaultModel || '';
+    }
   }
 
   function renderBaseUrlPresets(provider: LLMProvider) {
@@ -206,7 +217,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   function updateProviderState(provider: LLMProvider, preserveBaseUrl: boolean = false) {
     setSelectedProvider(provider);
     if (!preserveBaseUrl) {
-      baseUrlInput.value = getCachedBaseUrl(provider);
+      baseUrlInput.value = getCachedBaseUrl(provider) || (provider === 'system_one' ? 'https://api.typesafe.ai/v1' : '');
     }
     apiKeyInput.placeholder = provider === 'custom_fetch' ? '可留空，本地服务如需鉴权可填写' : '请输入API密钥';
     renderBaseUrlPresets(provider);
@@ -457,7 +468,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const storedBaseUrlsByProvider = settings.baseUrlsByProvider as Partial<Record<LLMProvider, unknown>> | undefined;
   baseUrlsByProvider = {};
-  (['openai', 'anthropic', 'custom_fetch'] as const).forEach((provider) => {
+  (['openai', 'anthropic', 'custom_fetch', 'system_one'] as const).forEach((provider) => {
     const value = storedBaseUrlsByProvider?.[provider];
     if (typeof value === 'string' && value.trim()) {
       baseUrlsByProvider[provider] = value.trim();
@@ -468,7 +479,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   modelsByBaseUrl = settings.modelsByBaseUrl || {};
   const persistedProvider = settings.provider as StoredLLMSettings['provider'];
   const initialProvider: LLMProvider =
-    persistedProvider === 'openai' || persistedProvider === 'anthropic' || persistedProvider === 'custom_fetch'
+    persistedProvider === 'openai' || persistedProvider === 'anthropic' || persistedProvider === 'custom_fetch' || persistedProvider === 'system_one'
       ? persistedProvider
       : 'openai';
   const resolvedLLMSettings = resolveLLMSettings({
@@ -504,6 +515,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     modelInput.value = modelsByBaseUrl[activeBaseUrlKey];
   } else if (settings.model) {
     modelInput.value = settings.model;
+  } else if (initialProvider === 'system_one') {
+    modelInput.value = findSystemOnePreset(initialBaseUrl)?.defaultModel || '';
   }
   if (typeof settings.enableExtension === 'boolean') enableExtensionCheckbox.checked = settings.enableExtension;
   if (typeof settings.autoSkipAd === 'boolean') autoSkipAdCheckbox.checked = settings.autoSkipAd;
@@ -523,7 +536,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     const currentTab = tabs[0];
     if (!currentTab || !currentTab.id) return;
-    if (!currentTab.url?.includes('bilibili.com/video/') && !currentTab.url?.includes('bilibili.com/list/watchlater')) {
+    if (!isBilibiliVideoPage(currentTab.url)) {
       resultDiv.textContent = '当前不在哔哩哔哩视频页面';
       return;
     }
