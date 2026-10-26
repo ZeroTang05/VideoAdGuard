@@ -1,6 +1,6 @@
 import { RemoteAdRecord } from '../types/cloud-cache';
 
-const CLIENT_VERSION = '1.4.2';
+const CLIENT_VERSION = '1.4.3';
 
 // 默认云端端点
 const DEFAULT_WORKER_URL = 'https://videoadguard-api.0100320.xyz';

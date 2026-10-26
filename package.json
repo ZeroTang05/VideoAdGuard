@@ -1,6 +1,6 @@
 {
   "name": "video-ad-guard",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "license": "GPL-2.0-or-later",
   "scripts": {
     "build": "node scripts/build.js",
