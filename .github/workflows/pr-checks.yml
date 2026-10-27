@@ -89,12 +89,12 @@ jobs:
           OWNER=${REPO_FULL%%/*}
           REPO_NAME=${REPO_FULL#*/}
 
-          # 仅当 PR 作者不是 Warma10032 时，请求其作为 reviewer
-          if [ "$PR_AUTHOR" != "Warma10032" ]; then
+          # 仅当 PR 作者不是 ZeroTang05 时，请求其作为 reviewer
+          if [ "$PR_AUTHOR" != "ZeroTang05" ]; then
             gh api repos/$OWNER/$REPO_NAME/pulls/$PR_NUMBER/requested_reviewers \
               --method POST \
-              --field reviewers[]='Warma10032' \
+              --field reviewers[]='ZeroTang05' \
               --jq '.'
           else
-            echo "Skipping review request for Warma10032 since they are the PR author."
+            echo "Skipping review request for ZeroTang05 since they are the PR author."
           fi

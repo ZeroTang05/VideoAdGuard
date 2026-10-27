@@ -1,13 +1,16 @@
 # VideoAdGuard - B站视频植入广告检测器
 
-> **Looking for the English version? See [README.en.md](./README.en.md).**
-> VideoAdGuard detects embedded ads inside Bilibili videos with an LLM and lets you skip them.
+> [README.en.md](./README.en.md)
 
 VideoAdGuard 是一个基于大语言模型的B站视频植入广告检测工具，能够自动识别B站视频中的植入广告内容，并提供跳过广告的功能。
 
 如果你觉得这个插件有用，请给项目点个Star⭐支持一下！
 
-[演示视频](https://www.bilibili.com/video/BV1UGeBztE2T/)
+<div align="center">
+  <img src="./docs/assets/demo.gif" alt="VideoAdGuard 演示视频：自动识别 B 站视频中的植入广告" width="480">
+</div>
+
+> 观看完整演示视频：[B 站 BV1UGeBztE2T](https://www.bilibili.com/video/BV1UGeBztE2T/)
 
 <div align="center">
   <img src="./icons/icon128.png" alt="VideoAdGuard Logo">
@@ -267,15 +270,15 @@ VideoAdGuard
 
 本项目完全开源，欢迎贡献代码和提出建议：
 
-- GitHub仓库：[https://github.com/Warma10032/VideoAdGuard](https://github.com/Warma10032/VideoAdGuard)
-- 问题反馈：[GitHub Issues](https://github.com/Warma10032/VideoAdGuard/issues)
+- GitHub仓库：[https://github.com/ZeroTang05/VideoAdGuard](https://github.com/ZeroTang05/VideoAdGuard)
+- 问题反馈：[GitHub Issues](https://github.com/ZeroTang05/VideoAdGuard/issues)
 - 如遇任何插件不起作用问题，在提出Issues同时，附上浏览器(F12)控制台的错误日志/截图，以便我们更好地帮助你。
 - ![与后端api通信的请求在这里查看](https://imgbed.xiaobaozi.cn/file/blog/插件管理界面.webp)
 
 ### 贡献者
 
-<a href="https://github.com/Warma10032/VideoAdGuard/contributors">
-  <img src="https://contrib.rocks/image?repo=Warma10032/VideoAdGuard" /></a>
+<a href="https://github.com/ZeroTang05/VideoAdGuard/contributors">
+  <img src="https://contrib.rocks/image?repo=ZeroTang05/VideoAdGuard" /></a>
 
 ## 免责声明
 
@@ -283,27 +286,16 @@ VideoAdGuard
 
 ---
 
-## 需要一个能落地 AI 能力的开发者？
-
-VideoAdGuard 里的「用大模型判断这段是不是广告」是同一种活：把模型接进真实业务里，
-而不是做 demo。我做 AI 应用全栈——LLM 接入、实时多人系统、支付与订阅、部署运维，一个人交付完整链路。
-
-- [服务目录与作品集](https://requirement-diagnoser.tangziye2.workers.dev/go?s=gh-service-videoadguard&u=https%3A%2F%2Fzerotang-studio.pages.dev%2F)
-- [接单行情报告](https://requirement-diagnoser.tangziye2.workers.dev/go?s=gh-market-videoadguard&u=https%3A%2F%2Fzerotang-studio.pages.dev%2Fmarket.html):438 个真实在招项目的价格分布
-- [需求诊断台](https://requirement-diagnoser.tangziye2.workers.dev/go?s=gh-diagnoser-videoadguard&u=https%3A%2F%2Frequirement-diagnoser.tangziye2.workers.dev%2F):贴一段需求，30 秒出可行性、方案与报价区间
-
-<!-- freelancing -->
-
 ## 许可证
 
 本项目采用GPLv2许可证开源。
 
 ## Star History
 
-<a href="https://www.star-history.com/#Warma10032/videoadguard&Date">
+<a href="https://www.star-history.com/#ZeroTang05/videoadguard&Date">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Warma10032/videoadguard&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Warma10032/videoadguard&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Warma10032/videoadguard&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=ZeroTang05/videoadguard&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=ZeroTang05/videoadguard&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=ZeroTang05/videoadguard&type=Date" />
  </picture>
 </a>

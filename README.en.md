@@ -7,6 +7,12 @@
 [![Edge](https://img.shields.io/badge/Microsoft%20Edge-0078D4?style=for-the-badge&logo=Microsoft-edge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/videoadguard/mpfelbgplaolpbjmdbjjajonkmmgekgo/)
 [![Firefox](https://img.shields.io/badge/Firefox-FF7139?style=for-the-badge&logo=Firefox-Browser&logoColor=white)](https://addons.mozilla.org/firefox/addon/videoadguard/)
 
+<div align="center">
+  <img src="./docs/assets/demo.gif" alt="VideoAdGuard demo: automatically detecting embedded ads in a Bilibili video" width="480">
+</div>
+
+> Watch the full demo: [Bilibili BV1UGeBztE2T](https://www.bilibili.com/video/BV1UGeBztE2T/)
+
 ## What it does
 
 Bilibili videos frequently contain **embedded ads** — product placements read by the creator, not

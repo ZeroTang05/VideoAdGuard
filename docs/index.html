@@ -12,7 +12,7 @@
     <meta property="og:title" content="VideoAdGuard - 智能视频广告检测助手">
     <meta property="og:description" content="基于大语言模型的B站视频植入广告检测工具">
     <meta property="og:type" content="website">
-    <meta property="og:url" content="https://warma10032.github.io/VideoAdGuard/">
+    <meta property="og:url" content="https://ZeroTang05.github.io/VideoAdGuard/">
 
     <!-- Favicon -->
     <link rel="icon" type="image/png" sizes="32x32" href="https://imgbed.xiaobaozi.cn/file/blog/VideoAdGuard32.webp">
@@ -326,6 +326,51 @@
             margin-bottom: 1.5rem;
         }
 
+        /* Demo Section */
+        .demo {
+            padding: 80px 0;
+            background: var(--light-pink);
+        }
+
+        .demo-frame {
+            position: relative;
+            width: 100%;
+            max-width: 900px;
+            margin: 0 auto;
+            padding-top: 56.25%;
+            /* 16:9 的比例，用 padding-top 撑出高度，兼容旧浏览器 */
+            background: var(--text-dark);
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: var(--shadow);
+        }
+
+        .demo-frame iframe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border: 0;
+        }
+
+        .demo-note {
+            text-align: center;
+            margin-top: 1.5rem;
+            color: var(--text-light);
+            font-size: 0.95rem;
+        }
+
+        .demo-note a {
+            color: var(--primary-pink);
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .demo-note a:hover {
+            text-decoration: underline;
+        }
+
         /* Testimonials Section */
         .testimonials {
             padding: 80px 0;
@@ -491,10 +536,11 @@
                 VideoAdGuard
             </a>
             <ul class="nav-links">
+                <li><a href="#demo">演示视频</a></li>
                 <li><a href="#features">功能特色</a></li>
                 <li><a href="#installation">安装使用</a></li>
                 <li><a href="privacy/">隐私政策</a></li>
-                <li><a href="https://github.com/Warma10032/VideoAdGuard" target="_blank">GitHub</a></li>
+                <li><a href="https://github.com/ZeroTang05/VideoAdGuard" target="_blank">GitHub</a></li>
                 <li><a href="https://www.xiaobaozi.cn/" target="_blank">个人主页</a></li>
             </ul>
         </nav>
@@ -511,11 +557,28 @@
                         class="btn btn-primary" target="_blank">
                         <i class="fas fa-download"></i>&nbsp;立即安装
                     </a>
-                    <a href="https://github.com/Warma10032/VideoAdGuard" class="btn btn-secondary" target="_blank">
+                    <a href="https://github.com/ZeroTang05/VideoAdGuard" class="btn btn-secondary" target="_blank">
                         <i class="fab fa-github"></i>&nbsp;查看源码
                     </a>
                 </div>
             </div>
+        </div>
+    </section>
+
+    <!-- Demo Section -->
+    <section id="demo" class="demo">
+        <div class="container">
+            <div class="section-title fade-in-up">
+                <h2>演示视频</h2>
+                <p>打开B站视频，插件自动识别口播广告并标记区间，可一键跳过</p>
+            </div>
+            <div class="demo-frame fade-in-up">
+                <iframe src="https://player.bilibili.com/player.html?bvid=BV1UGeBztE2T&page=1&high_quality=1&danmaku=0&autoplay=0"
+                    scrolling="no" frameborder="0" allowfullscreen="true" title="VideoAdGuard 演示视频"></iframe>
+            </div>
+            <p class="demo-note fade-in-up">
+                在B站观看完整版：<a href="https://www.bilibili.com/video/BV1UGeBztE2T/" target="_blank">BV1UGeBztE2T</a>
+            </p>
         </div>
     </section>
 
@@ -837,13 +900,13 @@
                             style="color: var(--primary-pink); text-decoration: none;">隐私政策</a></p>
                 </div>
                 <div class="social-links">
-                    <a href="https://github.com/Warma10032/VideoAdGuard" target="_blank" title="GitHub">
+                    <a href="https://github.com/ZeroTang05/VideoAdGuard" target="_blank" title="GitHub">
                         <i class="fab fa-github"></i>
                     </a>
-                    <a href="https://github.com/Warma10032/VideoAdGuard/issues" target="_blank" title="问题反馈">
+                    <a href="https://github.com/ZeroTang05/VideoAdGuard/issues" target="_blank" title="问题反馈">
                         <i class="fas fa-bug"></i>
                     </a>
-                    <a href="https://github.com/Warma10032/VideoAdGuard/releases" target="_blank" title="版本发布">
+                    <a href="https://github.com/ZeroTang05/VideoAdGuard/releases" target="_blank" title="版本发布">
                         <i class="fas fa-download"></i>
                     </a>
                 </div>
