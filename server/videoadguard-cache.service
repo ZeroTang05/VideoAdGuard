@@ -1,0 +1,18 @@
+[Unit]
+Description=VideoAdGuard cache service
+After=network.target
+
+[Service]
+Type=exec
+DynamicUser=yes
+StateDirectory=videoadguard-cache
+WorkingDirectory=/opt/videoadguard-cache
+Environment=NODE_ENV=production
+Environment=PORT=8787
+Environment=DB_PATH=/var/lib/videoadguard-cache/cache.sqlite3
+ExecStart=/opt/videoadguard-cache/bin/node /opt/videoadguard-cache/dist/index.js
+Restart=on-failure
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target

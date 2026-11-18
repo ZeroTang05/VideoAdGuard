@@ -35,7 +35,7 @@ npm run build      # 编译到 dist/
 PORT=8787 DB_PATH=/var/lib/videoadguard/cache.sqlite3 npm start
 ```
 
-建议用 systemd 托管（`ExecStart=/usr/bin/node /path/to/server/dist/index.js`，`Restart=always`）。
+可用 [videoadguard-cache.service](videoadguard-cache.service) 交给 systemd 托管。服务从 `/opt/videoadguard-cache` 读取 `bin/node`、`dist/` 和 `node_modules/`，SQLite 数据保存在 `/var/lib/videoadguard-cache`。
 
 ### 方式二：Docker
 
