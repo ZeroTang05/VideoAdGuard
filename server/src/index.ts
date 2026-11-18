@@ -27,6 +27,7 @@ import {
 
 const app = express();
 const PORT = Number(process.env.PORT) || 8787;
+const BIND_ADDRESS = process.env.CACHE_BIND_ADDRESS || undefined;
 
 // JSON 解析与体积限制（与 Worker 的 content-length 检查一致）
 app.use(express.json({ limit: MAX_BODY_SIZE }));
@@ -202,8 +203,8 @@ app.use((_req, res) => {
 // 启动（被 import 时不自动监听，便于测试）
 if (require.main === module) {
   initDb();
-  app.listen(PORT, () => {
-    console.log(`【VideoAdGuard】自建缓存服务已启动: http://0.0.0.0:${PORT}`);
+  app.listen({ port: PORT, host: BIND_ADDRESS }, () => {
+    console.log(`【VideoAdGuard】自建缓存服务已启动: http://${BIND_ADDRESS || '0.0.0.0'}:${PORT}`);
   });
 }
 

@@ -35,7 +35,7 @@ npm run build      # 编译到 dist/
 PORT=8787 DB_PATH=/var/lib/videoadguard/cache.sqlite3 npm start
 ```
 
-可用 [videoadguard-cache.service](videoadguard-cache.service) 交给 systemd 托管。服务从 `/opt/videoadguard-cache` 读取 `bin/node`、`dist/` 和 `node_modules/`，SQLite 数据保存在 `/var/lib/videoadguard-cache`。
+可用 [videoadguard-cache.service](videoadguard-cache.service) 交给 systemd 托管。服务监听 `127.0.0.1:8787`，供同一台机器上的反向代理访问。服务从 `/opt/videoadguard-cache` 读取 `bin/node`、`dist/` 和 `node_modules/`，SQLite 数据保存在 `/var/lib/videoadguard-cache`。
 
 ### 方式二：Docker
 
@@ -70,6 +70,7 @@ const SELF_HOSTED_API_URL = 'https://cache.你的域名.xyz';
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `PORT` | `8787` | 监听端口 |
+| `CACHE_BIND_ADDRESS` | 系统默认 | 监听地址；systemd 服务使用 `127.0.0.1` |
 | `DB_PATH` | `./data/cache.sqlite3` | SQLite 数据库文件路径（目录自动创建） |
 
 ## 数据
