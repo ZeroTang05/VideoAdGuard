@@ -1,0 +1,25 @@
+{
+  "name": "videoadguard-cache-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "自建缓存服务：API 与 Cloudflare Worker 版完全对齐，部署在自己的服务器上作为第二后端",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.4.1",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/express": "^5.0.5",
+    "@types/node": "^22.19.3",
+    "supertest": "^7.1.4",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.5"
+  }
+}
