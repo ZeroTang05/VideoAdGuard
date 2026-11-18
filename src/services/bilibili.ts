@@ -72,6 +72,24 @@ export class BilibiliService {
     return data;
   }
 
+  /**
+   * 获取视频热度序列（播放进度条热度数据）
+   * 该序列可作为 LSTM/Transformer 时间序列模型的输入，用于识别广告片段
+   * @param bvid 视频的BVID
+   * @param cid 视频的CID
+   * @returns 各时间片的热度数值数组
+   */
+  public static async getVideoHeat(bvid: string, cid: number) {
+    console.log('【VideoAdGuard】[BilibiliService] Getting video heat');
+    const data = await this.fetchWithCookie(
+      'https://api.bilibili.com/x/player/pbp',
+      { bvid: bvid, cid: cid }
+    );
+    const heat = Array.isArray(data) ? data : data?.pbp;
+    console.log('【VideoAdGuard】[BilibiliService] Video heat result:', heat);
+    return Array.isArray(heat) ? heat : [];
+  }
+
   public static async getCaptions(url: string) {
     console.log('【VideoAdGuard】[BilibiliService] Getting captions from URL:', url);
     const response = await fetch(url);
