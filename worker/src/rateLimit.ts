@@ -16,9 +16,12 @@ export interface RateLimitEntry {
 export const RATE_LIMIT_CLEANUP_INTERVAL = 100;
 export const RATE_LIMIT_CLEANUP_WINDOW = 60_000;
 
-export const RATE_LIMITS: Record<'getCache' | 'saveCache', RateLimitConfig> = {
+export const RATE_LIMITS: Record<'getCache' | 'saveCache' | 'getAiScript' | 'saveAiScript' | 'getBatch', RateLimitConfig> = {
   getCache: { windowMs: 1000, max: 2 },
   saveCache: { windowMs: 60_000, max: 10 },
+  getAiScript: { windowMs: 1000, max: 2 },
+  saveAiScript: { windowMs: 60_000, max: 10 },
+  getBatch: { windowMs: 1000, max: 2 },
 };
 
 // In-memory store for rate limiting
