@@ -9,9 +9,17 @@ export interface AdVideoInfo {
   goodNames?: string[];
 }
 
+/** AI 文案检测的输入：标题、简介和抽样后的文案文本。 */
+export interface AIScriptInfo {
+  title: string;
+  description: string;
+  sample: string;
+}
+
 /** Jev 使用明确的任务数据，避免从聊天提示词中反向解析字幕。 */
 export type LLMTask =
   | { kind: 'detect_ad'; videoInfo: AdVideoInfo; restricted: boolean }
+  | { kind: 'detect_ai_script'; scriptInfo: AIScriptInfo }
   | { kind: 'product_name'; linkTitle: string };
 
 export type LLMResponseFormat = 'json' | 'text';

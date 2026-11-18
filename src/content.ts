@@ -1,12 +1,18 @@
 import './utils/logger';
 import { BilibiliService } from './services/bilibili';
 import { AIService } from './services/ai';
+import { AI_SCRIPT_CRITERIA_VERSION } from './services/prompt';
 import { WhitelistService } from './services/whitelist';
 import { AudioService } from './services/audio';
 import { CacheService } from './services/cache';
 import { CloudCacheService } from './services/cloud-cache';
+import { AiScriptCacheService } from './services/ai-script-cache';
+import { isAutoSkipConfident } from './utils/ad-confidence';
 import { normalizeErrorForUser } from './utils/errors';
-import { isBilibiliVideoPage } from './utils/video-page';
+import { sampleScriptText } from './utils/script-samples';
+import { parseAiStyleScore } from './utils/script-result';
+import { VideoCardAnnotator } from './services/video-card-annotator';
+import { getVideoCardScenarios, isBilibiliVideoPage } from './utils/video-page';
 
 // 新增：广告片段接口，用于支持交互状态
 interface AdSegment {
@@ -220,17 +226,9 @@ class AdDetector {
       if (videoElement) {
         this.createAdMarkers(videoElement);
 
-        // 云端缓存的 isDetectionConfident 可能因上传时 videoElement.duration 为 NaN 而错误地为 false，
-        // 因此对于云端结果，基于当前 video 元素重新计算置信度
-        let isConfident = result.isDetectionConfident;
-        if (source === 'remote') {
-          const videoDuration = videoElement.duration;
-          const totalAdDuration = result.adTimeRanges.reduce((sum, [start, end]) => sum + (end - start), 0);
-          isConfident = result.adTimeRanges.length > 0 && !isNaN(videoDuration) && videoDuration > 0 && totalAdDuration < (videoDuration * 0.5);
-        }
-
+        // 置信度由各来源在调用前统一计算（见 isAutoSkipConfident），此处直接应用
         const { autoSkipAd } = await chrome.storage.local.get({ autoSkipAd: false });
-        if (autoSkipAd && isConfident) {
+        if (autoSkipAd && result.isDetectionConfident) {
           console.log(`【VideoAdGuard】设置自动跳过监听器${sourceLabel ? `（${sourceLabel}结果）` : ''}`);
           this.setupAutoSkip(videoElement);
         }
@@ -333,14 +331,19 @@ class AdDetector {
         const remote = remoteCacheResult.value;
         console.log('【VideoAdGuard】使用云端缓存的检测结果');
 
+        // 云端标志位可能因上传时视频未加载（duration 为 NaN）而不可靠，
+        // 这里基于当前视频重新计算，本地缓存与应用行为使用同一个值，避免首次访问与刷新后行为不一致
+        const videoElement = document.querySelector('video');
+        const isConfident = isAutoSkipConfident(remote.adTimeRanges, videoElement?.duration ?? NaN);
+
         // 写入本地缓存（标记来源为 remote）
-        await CacheService.saveDetectionResult(bvid, remote.exist, remote.goodName, remote.adTimeRanges, remote.isDetectionConfident, 'remote', remote.detectedAt, remote.model, remote.provider);
+        await CacheService.saveDetectionResult(bvid, remote.exist, remote.goodName, remote.adTimeRanges, isConfident, 'remote', remote.detectedAt, remote.model, remote.provider);
 
         await this.applyDetectionResult(bvid, {
           exist: remote.exist,
           goodName: remote.goodName,
           adTimeRanges: remote.adTimeRanges,
-          isDetectionConfident: remote.isDetectionConfident,
+          isDetectionConfident: isConfident,
         }, 'remote');
         return;
       }
@@ -599,31 +602,25 @@ class AdDetector {
         const videoElement = document.querySelector('video');
         const videoDuration = videoElement ? videoElement.duration : 0;
 
-        let totalAdDuration = 0;
-        if (second_lists && second_lists.length > 0) {
-          totalAdDuration = second_lists.reduce((sum, [start, end]) => sum + (end - start), 0);
-        }
-
-        const isDetectionConfident =
-          second_lists.length > 0 &&
-          this.validIndexLists.length <= 3 &&
-          totalAdDuration < (videoDuration * 0.5);
+        const isDetectionConfident = isAutoSkipConfident(second_lists, videoDuration);
 
         await CacheService.saveDetectionResult(bvid, true, result.good_name || [], second_lists, isDetectionConfident, 'local', undefined, llmMeta.model, llmMeta.provider);
 
-        // 异步上传云端缓存（不 await，不阻塞）
-        void CloudCacheService.saveRemoteCache(bvid, {
-          exist: true,
-          goodName: result.good_name || [],
-          adTimeRanges: second_lists,
-          model: llmMeta.model,
-          provider: llmMeta.provider,
-          detectedAt: Date.now(),
-          isDetectionConfident,
-          accuracy: 'accurate',
-          source: 'ai',
-          version: 1,
-        });
+        // 异步上传云端缓存（不 await，不阻塞）；低置信度结果不上传，避免不可信的广告区间污染共享缓存
+        if (isDetectionConfident) {
+          void CloudCacheService.saveRemoteCache(bvid, {
+            exist: true,
+            goodName: result.good_name || [],
+            adTimeRanges: second_lists,
+            model: llmMeta.model,
+            provider: llmMeta.provider,
+            detectedAt: Date.now(),
+            isDetectionConfident,
+            accuracy: 'accurate',
+            source: 'ai',
+            version: 1,
+          });
+        }
 
         await this.applyDetectionResult(bvid, {
           exist: true,
@@ -1307,6 +1304,150 @@ class AdDetector {
   }
 }
 
+/**
+ * AI 感评分检测器：拉取字幕抽样（连同标题简介）交给 LLM 按 AI_SCRIPT_CRITERIA 评分，
+ * 在视频信息行末尾显示「AI 感 xx/100」角标。
+ * 与广告检测相互独立：评分失败不影响广告检测。
+ * 判断通道跟随设置中的服务商——System One 走真概率阈值组合，其余走 prompt 整数评分。
+ */
+class AIScriptDetector {
+  private static badgeElement: HTMLElement | null = null;
+
+  public static async analyze() {
+    try {
+      const settings = await chrome.storage.local.get(['enableExtension']);
+      if (settings.enableExtension === false) return;
+
+      const bvid = AdDetector.getBvidFromUrl();
+
+      // 三层查找与广告检测一致：本地缓存 → 云端缓存 → AI 检测
+      const cached = await AiScriptCacheService.get(bvid);
+      if (cached) {
+        console.log('【VideoAdGuard】AI 感评分：使用本地缓存');
+        this.showBadge(cached.aiScore, cached.provider, cached.model, 'local');
+        return;
+      }
+
+      const remote = await CloudCacheService.fetchRemoteAIScript(bvid);
+      if (remote) {
+        console.log('【VideoAdGuard】AI 感评分：使用云端缓存');
+        await AiScriptCacheService.save(bvid, {
+          aiScore: remote.aiScore,
+          criteriaVersion: remote.criteriaVersion,
+          model: remote.model,
+          provider: remote.provider,
+          detectedAt: remote.detectedAt,
+          source: 'remote',
+        });
+        this.showBadge(remote.aiScore, remote.provider, remote.model, 'remote');
+        return;
+      }
+
+      const videoInfo = await BilibiliService.getVideoInfo(bvid);
+      const playerInfo = await BilibiliService.getPlayerInfo(bvid, videoInfo.cid);
+
+      if (!playerInfo.subtitle?.subtitles?.length) {
+        console.log('【VideoAdGuard】AI 感评分：视频无字幕，跳过');
+        return;
+      }
+
+      const captionsUrl = 'https:' + playerInfo.subtitle.subtitles[0].subtitle_url;
+      const captionsData = await BilibiliService.getCaptions(captionsUrl);
+      const captions: Record<number, string> = {};
+      captionsData.body.forEach((caption: CaptionItem, index: number) => {
+        captions[index] = caption.content;
+      });
+
+      const sample = sampleScriptText(captions);
+      if (!sample) {
+        console.log('【VideoAdGuard】AI 感评分：字幕内容为空，跳过');
+        return;
+      }
+
+      console.log('【VideoAdGuard】开始 AI 感评分（标题+简介+字幕抽样）');
+      const result = await AIService.detectAIScript({
+        title: videoInfo.title,
+        description: videoInfo.desc || '',
+        sample,
+      });
+
+      const score = parseAiStyleScore(result.text);
+      if (score === null) throw new Error(normalizeErrorForUser('AI 感评分返回数据格式错误', 'detection'));
+
+      const record = {
+        aiScore: score,
+        criteriaVersion: AI_SCRIPT_CRITERIA_VERSION,
+        model: result.model,
+        provider: result.provider,
+        detectedAt: Date.now(),
+        source: 'local' as const,
+      };
+      await AiScriptCacheService.save(bvid, record);
+
+      // 异步上传云端共享（不 await，不阻塞显示）
+      void CloudCacheService.saveRemoteAIScript(bvid, {
+        aiScore: record.aiScore,
+        criteriaVersion: record.criteriaVersion,
+        model: record.model,
+        provider: record.provider,
+        detectedAt: record.detectedAt,
+      });
+
+      console.log('【VideoAdGuard】AI 感评分结果:', { score, provider: result.provider, model: result.model });
+      this.showBadge(score, record.provider, record.model, 'ai');
+    } catch (error) {
+      console.warn('【VideoAdGuard】AI 感评分失败:', error);
+      this.removeBadge();
+    }
+  }
+
+  /** 在视频信息行（播放量/弹幕/日期）末尾插入角标，未渲染时延迟重试 */
+  private static showBadge(score: number, provider: string, model: string, source: 'local' | 'remote' | 'ai', retryCount = 0): void {
+    const detailList = document.querySelector('.video-info-detail-list.video-info-detail-content');
+
+    if (!detailList) {
+      if (retryCount >= 5) {
+        console.log('【VideoAdGuard】未找到视频信息行容器，放弃显示 AI 感角标');
+        return;
+      }
+      setTimeout(() => this.showBadge(score, provider, model, source, retryCount + 1), 1000);
+      return;
+    }
+
+    this.removeBadge();
+    // 分数分级配色：高→B站粉，中→橙，低→灰
+    const color = score >= 70 ? '#f25d8e' : score >= 40 ? '#ff7f24' : '#9499a0';
+    const sourceLabel = source === 'local' ? '本地缓存' : source === 'remote' ? '云端共享' : 'AI 检测';
+
+    const badge = document.createElement('span');
+    badge.className = 'ai-script-badge10032';
+    badge.textContent = `AI 感 ${score}/100`;
+    badge.title = `AI 风格评分 ${score}/100（模式化、冗余、抽象化等特征强度）\n来源: ${provider} / ${model}（${sourceLabel}）`;
+    badge.style.cssText = `
+      display: inline-flex;
+      align-items: center;
+      align-self: center;
+      padding: 2px 8px;
+      margin-left: 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+      color: ${color};
+      background: ${color}1a;
+      border: 1px solid ${color}55;
+    `;
+    detailList.appendChild(badge);
+    this.badgeElement = badge;
+  }
+
+  private static removeBadge(): void {
+    this.badgeElement?.remove();
+    this.badgeElement = null;
+    document.querySelectorAll('.ai-script-badge10032').forEach((element) => element.remove());
+  }
+}
+
 // 消息监听器：
 chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   if (request.type === 'GET_AD_INFO') {
@@ -1326,9 +1467,14 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   }
 });
 
-// 页面加载监听：页面加载完成后执行
+// 页面加载监听：视频页跑广告/AI感评分，视频入口页（首页/热门/搜索/动态等）启动卡片标注
 window.addEventListener('load', () => {
-  if (isBilibiliVideoPage(location.href)) AdDetector.analyze();
+  if (isBilibiliVideoPage(location.href)) {
+    AdDetector.analyze();
+    AIScriptDetector.analyze();
+  } else if (getVideoCardScenarios(location.href).length > 0) {
+    VideoCardAnnotator.start();
+  }
 });
 
 // 添加 URL 变化监听
@@ -1347,6 +1493,7 @@ new MutationObserver(() => {
     if (currentBvid && currentBvid !== previousBvid) {
       console.log('【VideoAdGuard】URL changed with different BV:', url, 'Previous BV:', previousBvid, 'Current BV:', currentBvid);
       AdDetector.analyze();
+      AIScriptDetector.analyze();
     } else {
       console.log('【VideoAdGuard】URL changed but BV unchanged, skipping detection:', url);
     }

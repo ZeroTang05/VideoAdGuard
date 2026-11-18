@@ -2,7 +2,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { isBilibiliVideoPage } from './video-page';
+import { getVideoCardScenarios, isBilibiliVideoPage } from './video-page';
+import { VIDEO_CARD_SCENARIOS } from '../services/video-card-scenarios';
 
 describe('B 站视频页面识别', () => {
   it.each([
@@ -37,5 +38,41 @@ describe('B 站视频页面识别', () => {
     expect(script.matches).toContain('*://*.bilibili.com/festival/*');
     expect(script.matches).toContain('*://*.bilibili.com/video/*');
     expect(script.matches).toContain('*://*.bilibili.com/list/watchlater*');
+  });
+});
+
+describe('视频卡片标注场景判定', () => {
+  it.each([
+    ['https://www.bilibili.com/', ['mainPageRecommendation', 'bilibiliGateMainPage', 'bewlybewlyMainPage']],
+    // BewlyBewly 把搜索/历史塞进主页路径的 query
+    ['https://www.bilibili.com/?page=SearchResults', ['bewlybewlyMainPage']],
+    ['https://www.bilibili.com/?page=History', ['bewlybewlyMainPage']],
+    ['https://www.bilibili.com/v/popular/all', ['popular']],
+    ['https://search.bilibili.com/all?keyword=test', ['search']],
+    ['https://t.bilibili.com/', ['dynamic']],
+  ])('识别标注场景：%s', (url, expected: string[]) => {
+    expect(getVideoCardScenarios(url as string)).toEqual(expected);
+  });
+
+  it.each([
+    undefined,
+    '无效网址',
+    'https://www.bilibili.com/video/BV1dHHP6FEiL/',
+    'https://account.bilibili.com/history',
+    'https://live.bilibili.com/',
+  ])('非视频入口页面不标注：%s', (url) => {
+    expect(getVideoCardScenarios(url as string)).toEqual([]);
+  });
+
+  it('场景注册表每个条目字段完整且 key 一致', () => {
+    for (const [key, scenario] of Object.entries(VIDEO_CARD_SCENARIOS)) {
+      expect(scenario.key).toBe(key);
+      expect(scenario.containerSelector).toBeTruthy();
+      expect(scenario.cardSelector).toBeTruthy();
+    }
+  });
+
+  it('BewlyBewly 场景声明了 Shadow DOM 宿主', () => {
+    expect(VIDEO_CARD_SCENARIOS.bewlybewlyMainPage.shadowHostSelector).toBe('#bewly');
   });
 });

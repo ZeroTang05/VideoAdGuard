@@ -18,3 +18,17 @@ export interface RemoteAdRecord {
   version: number;
   clientVersion?: string;
 }
+
+/** 云端 AI 感评分记录（Worker KV 键：ai:bvid） */
+export interface RemoteAiScriptRecord {
+  bvid: string;
+  /** AI 感分数，0~100 整数 */
+  aiScore: number;
+  /** 评分标准版本，标准换版后旧记录自动失效 */
+  criteriaVersion: number;
+  model: string;
+  provider: string;
+  detectedAt: number;
+  version: number;
+  clientVersion?: string;
+}

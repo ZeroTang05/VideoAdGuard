@@ -1,8 +1,9 @@
 /** 验证完整字幕的单次请求、区间合并与非法答案。 */
 import { describe, expect, it } from 'vitest';
 import { buildApiUrl, resolveLLMSettings } from './config';
-import { buildAdRequest, mergeAdIndices, readAdProbability, selectAdIndices } from './system-one';
-import { NORMAL_AD_RULES } from '../ad-rules';
+import { buildAdRequest, buildAIScriptRequest, combineAiStyleScore, mergeAdIndices, readAdProbability, readAiStyleScore, selectAdIndices } from './system-one';
+import { AI_SCRIPT_CRITERIA } from '../prompt';
+import { NORMAL_AD_RULES } from '../prompt';
 import type { NoulResponse } from '@typesafe-ai/sdk';
 import type { AdVideoInfo } from './types';
 import { findSystemOnePreset, getSystemOneSdkBaseUrl, SYSTEM_ONE_PRESETS } from './system-one-presets';
@@ -84,6 +85,41 @@ describe('Jev 广告检测', () => {
       expect(settings.apiUrl).toBe('https://api.typesafe.ai/v1/systemone');
     }
     expect(buildApiUrl('openai', 'https://api.example.com/v1')).toBe('https://api.example.com/v1/chat/completions');
+  });
+});
+
+describe('System One AI 感评分', () => {
+  const scriptInfo = { title: '震惊！', description: '简介', sample: '你知道吗……总之……' };
+
+  it('一个 score 打分问题，共享完整上下文与五档量表', () => {
+    const request = buildAIScriptRequest(scriptInfo, 'jev-latest');
+    const state = JSON.parse(request.state as string);
+    expect(state.criteria).toBe(AI_SCRIPT_CRITERIA);
+    expect(state.title).toBe('震惊！');
+    expect(state.scriptSample).toBe('你知道吗……总之……');
+    expect(Object.keys(request.questions)).toEqual(['score_ai']);
+    const question = request.questions.score_ai as { type: string; criteria: readonly unknown[] };
+    expect(question.type).toBe('score');
+    expect(question.criteria).toHaveLength(5);
+  });
+
+  it('读取量表期望分，缺失或非法立即报错', () => {
+    const answer = (score: number) => ({ score_ai: { type: 'score' as const, score } });
+    expect(readAiStyleScore(answer(3))).toBe(75);
+    expect(readAiStyleScore(answer(2.37))).toBe(59); // 期望分可落在整数档之间
+    expect(() => readAiStyleScore({})).toThrow('缺少有效分数');
+    for (const invalid of [NaN, Infinity, -0.1, 4.1]) {
+      expect(() => readAiStyleScore(answer(invalid))).toThrow('缺少有效分数');
+    }
+  });
+
+  it('量表期望分线性换算为 0~100 整数', () => {
+    expect(combineAiStyleScore(0)).toBe(0);
+    expect(combineAiStyleScore(4)).toBe(100);
+    expect(combineAiStyleScore(2)).toBe(50);
+    expect(combineAiStyleScore(2.5)).toBe(63);
+    expect(combineAiStyleScore(99)).toBe(100); // 越界收敛到 0~100
+    expect(combineAiStyleScore(-1)).toBe(0);
   });
 });
 

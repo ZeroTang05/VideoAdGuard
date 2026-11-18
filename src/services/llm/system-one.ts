@@ -1,9 +1,10 @@
 /** System One：一次请求判断完整字幕，再由代码合并字幕区间。 */
-import { noul, TypeSafeClient } from '@typesafe-ai/sdk';
-import type { NoulQuestion, NoulResponse, SystemOneRequest } from '@typesafe-ai/sdk';
-import type { AdVideoInfo, LLMInvokePayload, LLMInvokeResult, ResolvedLLMSettings } from './types';
+import { noul, score, TypeSafeClient } from '@typesafe-ai/sdk';
+import type { NoulQuestion, NoulResponse, ScoreQuestion, ScoreResponse, SystemOneRequest } from '@typesafe-ai/sdk';
+import type { AdVideoInfo, AIScriptInfo, LLMInvokePayload, LLMInvokeResult, ResolvedLLMSettings } from './types';
 import { findSystemOnePreset, getSystemOneSdkBaseUrl } from './system-one-presets';
-import { NORMAL_AD_RULES } from '../ad-rules';
+import { AI_SCRIPT_CRITERIA } from '../prompt';
+import { NORMAL_AD_RULES } from '../prompt';
 
 export const JEV_AD_CORE_THRESHOLD = 0.5;
 export const JEV_AD_BOUNDARY_THRESHOLD = 0.2;
@@ -114,6 +115,47 @@ export function mergeAdIndices(indices: number[]): number[][] {
   return ranges;
 }
 
+/** AI 感五档量表：档位区间与 AI_SCRIPT_CRITERIA 的评分锚点对齐。 */
+export const AI_STYLE_RUBRIC = [
+  '0~20 明显真人：具体细节多、句式自然、主线清晰，清单几乎不命中',
+  '21~40 偏真人：零星命中 1~2 条特征，密度低',
+  '41~60 混合：几条特征轻度命中，或整体工整但仍有细节',
+  '61~80 偏 AI：命中 4 条以上且密集，或模板起手式/三段式高频复现',
+  '81~100 典型 AI 批量文案：多条特征高密度叠加，全文可预测，无真人细节',
+] as const;
+
+/** AI 感评分：一个 score 打分问题（五档量表），由代码换算成 0~100 分数。 */
+export function buildAIScriptRequest(scriptInfo: AIScriptInfo, model: string): SystemOneRequest<Record<string, ScoreQuestion>> {
+  return {
+    model,
+    state: JSON.stringify({
+      criteria: AI_SCRIPT_CRITERIA,
+      title: scriptInfo.title,
+      description: scriptInfo.description,
+      scriptSample: scriptInfo.sample,
+    }),
+    questions: {
+      score_ai: score('按 criteria 的评分规则，这份文案的 AI 感处于量表哪一档？', AI_STYLE_RUBRIC),
+    },
+  };
+}
+
+/** 读取量表期望分并换算为 0~100 整数，缺失或非法立即报错。 */
+export function readAiStyleScore(answers: Record<string, Pick<ScoreResponse, 'type' | 'score'>>): number {
+  const answer = answers?.score_ai;
+  const maxLevel = AI_STYLE_RUBRIC.length - 1;
+  if (answer?.type !== 'score' || typeof answer.score !== 'number' || !Number.isFinite(answer.score) || answer.score < 0 || answer.score > maxLevel) {
+    throw new Error(`模型返回结果格式异常：score 问题 score_ai 缺少有效分数（0~${maxLevel}）`);
+  }
+  return combineAiStyleScore(answer.score);
+}
+
+/** 量表期望分（0~4，可含小数）线性换算为 0~100 整数。 */
+export function combineAiStyleScore(rawScore: number): number {
+  const maxLevel = AI_STYLE_RUBRIC.length - 1;
+  return Math.min(100, Math.max(0, Math.round((rawScore / maxLevel) * 100)));
+}
+
 /** 使用官方 SDK 调用 System One，返回项目已有的广告结果格式。 */
 export async function invokeWithSystemOne(payload: LLMInvokePayload, settings: ResolvedLLMSettings): Promise<LLMInvokeResult> {
   if (!settings.apiKey) throw new Error('未设置API密钥');
@@ -132,6 +174,21 @@ export async function invokeWithSystemOne(payload: LLMInvokePayload, settings: R
     timeout: 30_000,
     retry: { maxRetries: 0 },
   });
+  if (task.kind === 'detect_ai_script') {
+    const scriptResult = await client.systemOne(buildAIScriptRequest(task.scriptInfo, settings.model)).withResponse();
+    const finalScore = readAiStyleScore(scriptResult.data.answers);
+    console.log('【VideoAdGuard】System One AI 感评分完成:', {
+      requestId: scriptResult.requestId,
+      model: scriptResult.data.model,
+      finalScore,
+    });
+    return {
+      text: JSON.stringify({ score: finalScore }),
+      provider: settings.provider,
+      model: scriptResult.data.model,
+      requestId: scriptResult.requestId,
+    };
+  }
   const { request, indices, products } = buildAdRequest(task.videoInfo, task.restricted, settings.model);
   console.log('【VideoAdGuard】System One 请求规模:', {
     model: settings.model,

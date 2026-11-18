@@ -1,6 +1,6 @@
 import { normalizeErrorForUser } from '../utils/errors';
-import { NORMAL_AD_RULES } from './ad-rules';
-import { LLMInvokePayload, LLMInvokeResult, LLMResponseFormat, LLMTask } from './llm/types';
+import { AI_SCRIPT_CRITERIA, NORMAL_AD_RULES } from './prompt';
+import { AIScriptInfo, LLMInvokePayload, LLMInvokeResult, LLMResponseFormat, LLMTask } from './llm/types';
 
 interface VideoInfo {
   title: string;
@@ -131,6 +131,25 @@ ${NORMAL_AD_RULES}
 }`;
     console.log('【VideoAdGuard】限制模式构建提示词成功:', { prompt });
     return prompt;
+  }
+
+  /** AI 感评分：按 AI_SCRIPT_CRITERIA 评分规则输出 0~100 整数分数。 */
+  public static async detectAIScript(scriptInfo: AIScriptInfo): Promise<{ text: string; provider: string; model: string }> {
+    return this.invokeModel(
+      AI_SCRIPT_CRITERIA,
+      `待评分的视频文案：
+标题：${scriptInfo.title || '无'}
+简介：${scriptInfo.description || '无'}
+文案抽样（开头/中段/结尾，条目间空格为转写停顿）：
+${scriptInfo.sample}
+
+输出最终分数：`,
+      'text',
+      // 思考模型做六维度评分时 thinking 草稿很长（实测 2048 都不够），预算与广告检测对齐；
+      // 按实际消耗计费，上限放大只是防止正文被截断
+      8192,
+      { kind: 'detect_ai_script', scriptInfo }
+    );
   }
 
   public static async extractProductName(linkTitle: string, sourceTitle: string = linkTitle): Promise<string> {
