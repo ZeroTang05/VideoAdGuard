@@ -19,12 +19,12 @@ let appWithDb: express.Express;
 const testDir = mkdtempSync(join(tmpdir(), 'vag-server-test-'));
 
 beforeAll(() => {
-  initDb(join(testDir, 'cache.sqlite3'));
+  initDb(join(testDir, 'cache.lmdb'));
   appWithDb = app;
 });
 
-afterAll(() => {
-  closeDb();
+afterAll(async () => {
+  await closeDb();
   rmSync(testDir, { recursive: true, force: true });
 });
 

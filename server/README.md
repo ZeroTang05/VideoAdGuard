@@ -32,10 +32,10 @@
 cd server
 npm ci
 npm run build      # 编译到 dist/
-PORT=8787 DB_PATH=/var/lib/videoadguard/cache.sqlite3 npm start
+PORT=8787 DB_PATH=/var/lib/videoadguard/cache.lmdb npm start
 ```
 
-可用 [videoadguard-cache.service](videoadguard-cache.service) 交给 systemd 托管。服务监听 `127.0.0.1:8787`，供同一台机器上的反向代理访问。服务从 `/opt/videoadguard-cache` 读取 `bin/node`、`dist/` 和 `node_modules/`，SQLite 数据保存在 `/var/lib/videoadguard-cache`。
+可用 [videoadguard-cache.service](videoadguard-cache.service) 交给 systemd 托管。服务监听 `127.0.0.1:8787`，供同一台机器上的反向代理访问。服务从 `/opt/videoadguard-cache` 读取 `bin/node`、`dist/` 和 `node_modules/`，LMDB 数据保存在 `/var/lib/videoadguard-cache/cache.lmdb/`。
 
 ### 方式二：Docker
 
@@ -71,8 +71,24 @@ const SELF_HOSTED_API_URL = 'https://cache.你的域名.xyz';
 |---|---|---|
 | `PORT` | `8787` | 监听端口 |
 | `CACHE_BIND_ADDRESS` | 系统默认 | 监听地址；systemd 服务使用 `127.0.0.1` |
-| `DB_PATH` | `./data/cache.sqlite3` | SQLite 数据库文件路径（目录自动创建） |
+| `DB_PATH` | `./data/cache.lmdb` | LMDB 数据目录（启动时自动创建） |
 
 ## 数据
 
-SQLite 单表 KV 结构（key → JSON），记录格式与 Cloudflare KV 完全相同。如果以后要把 Cloudflare 上的存量数据搬过来，直接把 KV 导出的 JSON 按 key 写入 `kv` 表即可。
+LMDB 将视频键和 JSON 文本保存在本地，记录格式与 Cloudflare KV 相同。
+
+### 从 SQLite 升级
+
+新部署可直接启动。已有 SQLite 数据时，先用 Node.js 22.13+ 或 24 安装新版本依赖并编译，再停掉旧服务，确保导入期间旧库没有新写入。按 systemd 默认路径执行导入。
+
+```bash
+node dist/migrate-sqlite.js /var/lib/videoadguard-cache/cache.sqlite3 /var/lib/videoadguard-cache/cache.lmdb
+```
+
+导入命令会输出记录数。旧 SQLite 库以只读方式打开，目标 LMDB 库需要为空。若以 root 导入，把新目录及其文件的所有者设为服务状态目录的所有者。
+
+```bash
+chown -R --reference=/var/lib/videoadguard-cache/ /var/lib/videoadguard-cache/cache.lmdb
+```
+
+然后部署新版的 `dist/` 和 `node_modules/`、安装新版 systemd 服务配置并重启。Docker 部署可在同一个数据卷里指定旧文件和新目录。

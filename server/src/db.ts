@@ -1,49 +1,40 @@
-/**
- * SQLite KV 存储：模拟 Cloudflare KV 的键值语义（key → JSON 字符串）。
- * 表结构刻意保持 KV 形态（而非关系列），使 Worker 与自建服务的数据行为完全一致，
- * 记录格式变化（增删字段）无需迁移表结构。
- */
+/** LMDB 缓存：直接用视频键查找 JSON 字符串，与 Worker 共用记录格式。 */
 
-import Database from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { open, type RootDatabase } from 'lmdb';
+import { join } from 'node:path';
 
-const DB_PATH = process.env.DB_PATH || join(process.cwd(), 'data', 'cache.sqlite3');
+const DB_PATH = process.env.DB_PATH || join(process.cwd(), 'data', 'cache.lmdb');
 
-// AI 文案评分的 KV 键前缀，与 worker/src/index.ts 保持一致
+// AI 文案评分的键前缀，与 Worker 保持一致
 export const AI_SCRIPT_KV_PREFIX = 'ai:';
 
-let db: Database.Database;
+let db: RootDatabase<string, string> | undefined;
 
-/** 初始化数据库连接（幂等），创建表和索引 */
-export function initDb(dbPath = DB_PATH): Database.Database {
-  if (db) return db;
+/** 运行时和迁移脚本按相同的目录结构和编码打开 LMDB。 */
+export function openCacheDb(path: string): RootDatabase<string, string> {
+  return open<string, string>({ path, noSubdir: false, encoding: 'string' });
+}
 
-  // 数据目录不存在时自动创建
-  mkdirSync(dirname(dbPath), { recursive: true });
+/** 启动时打开数据库，同一进程复用一个连接。 */
+export function initDb(dbPath = DB_PATH): RootDatabase<string, string> {
+  return db ??= openCacheDb(dbPath);
+}
 
-  db = new Database(dbPath);
-  db.pragma('journal_mode = WAL'); // 读写并发友好
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS kv (
-      key   TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    )
-  `);
+function getDb(): RootDatabase<string, string> {
+  if (!db) throw new Error('缓存数据库尚未初始化');
   return db;
 }
 
 export function kvGet(key: string): string | null {
-  const row = db.prepare('SELECT value FROM kv WHERE key = ?').get(key) as { value: string } | undefined;
-  return row ? row.value : null;
+  return getDb().get(key) ?? null;
 }
 
 export function kvPut(key: string, value: string): void {
-  db.prepare('INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
+  getDb().putSync(key, value);
 }
 
-/** 测试用：关闭连接 */
-export function closeDb(): void {
-  db?.close();
-  db = undefined as unknown as Database.Database;
+/** 测试用：关闭连接。 */
+export async function closeDb(): Promise<void> {
+  await db?.close();
+  db = undefined;
 }

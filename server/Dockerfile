@@ -14,7 +14,7 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 
 ENV PORT=8787
-ENV DB_PATH=/data/cache.sqlite3
+ENV DB_PATH=/data/cache.lmdb
 EXPOSE 8787
 
 CMD ["node", "dist/index.js"]
