@@ -1,26 +1,27 @@
 # VideoAdGuard 自建缓存服务
 
-自建后端：API 与 Cloudflare Worker 版完全对齐，作为插件云端缓存的第二后端（双写 + 兜底读），规避 Cloudflare 免费层限额（KV 写 1000 次/天是主要瓶颈）。
+自建后端提供共享检测缓存和人工文案标注。检测缓存与 Cloudflare Worker 共用接口，人工标注由自建服务统一写入。
 
 ## 架构
 
 ```
-插件客户端
+检测缓存
 ├── 写：自有服务器 + Cloudflare 并行双写（任一成功即成功）
 └── 读：自有服务器优先 → 失败/未命中 → Cloudflare 兜底
 ```
 
-- 自有服务器不可用时，插件行为自动退化为「仅 Cloudflare」，不影响使用
+- 自有服务器不可用时，检测缓存继续使用 Cloudflare
 - 两边数据通过双写保持最终一致；切换标准的旧记录靠 criteriaVersion 自动失效，无需迁移
 
-## API（与 Worker 完全一致）
+## API
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/cache/:bvid` | 查询广告缓存（仅返回 accurate 记录） |
 | POST | `/api/cache` | 保存/更新广告缓存 |
-| GET | `/api/ai-script/:bvid` | 查询 AI 感评分 |
+| GET | `/api/ai-script/:bvid` | 查询 AI 感评分，已有人工标注时附带 `aiScriptLabel` |
 | POST | `/api/ai-script` | 保存/更新 AI 感评分 |
+| POST | `/api/ai-script-label` | 提交 `{ bvid, isAiScript }`，后一次人工提交覆盖前一次 |
 | POST | `/api/batch` | 批量查询（首页卡片标注，上限 30 个 BV 号） |
 | GET | `/` | 健康检查（探活用） |
 

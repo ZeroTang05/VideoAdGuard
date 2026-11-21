@@ -103,6 +103,24 @@ describe('自建缓存服务 API', () => {
     }
   });
 
+  it('后提交的人工标注覆盖旧标注，模型写入不影响人工结果', async () => {
+    const bvid = 'BV1bb411c7mD';
+    const mark = (isAiScript: boolean) => request(appWithDb).post('/api/ai-script-label').send({ bvid, isAiScript });
+    const read = () => request(appWithDb).get(`/api/ai-script/${bvid}`);
+
+    expect((await mark(true)).body.success).toBe(true);
+    expect((await read()).body).toMatchObject({ aiScriptLabel: true, data: null });
+    expect((await mark(false)).body.success).toBe(true);
+    expect((await request(appWithDb).post('/api/ai-script').send({ bvid, aiScore: 95 })).body.success).toBe(true);
+    expect((await read()).body).toMatchObject({ aiScriptLabel: false, data: { aiScore: 95 } });
+
+    const batch = await request(appWithDb).post('/api/batch').send({ bvids: [bvid] });
+    expect(batch.body.data[bvid]).toMatchObject({ aiScriptLabel: false });
+    const invalid = await request(appWithDb).post('/api/ai-script-label').send({ bvid, isAiScript: 'true' });
+    expect(invalid.status).toBe(400);
+    expect((await read()).body.aiScriptLabel).toBe(false);
+  });
+
   it('POST /api/batch 一次返回两类数据并过滤 inaccurate 广告', async () => {
     const res = await request(appWithDb).post('/api/batch').send({
       bvids: [adBody.bvid, 'BV1aa411c7mD', 'BV1yy411c7mD'],

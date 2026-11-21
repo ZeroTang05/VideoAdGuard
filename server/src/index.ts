@@ -1,5 +1,5 @@
 /**
- * VideoAdGuard 自建缓存服务：API 与 Cloudflare Worker 版完全对齐。
+ * VideoAdGuard 自建缓存服务：提供共享缓存及人工文案标注。
  * 部署在自己的服务器上作为第二后端（双写/兜底读），规避 Cloudflare 免费层限额。
  *
  * 路由：
@@ -7,6 +7,7 @@
  *   POST /api/cache          - 保存/更新广告缓存
  *   GET  /api/ai-script/:bvid - 查询 AI 感评分
  *   POST /api/ai-script       - 保存/更新 AI 感评分
+ *   POST /api/ai-script-label - 保存/覆盖人工文案标注
  *   POST /api/batch           - 批量查询（首页卡片标注）
  *   GET  /                    - 健康检查（部署探活用）
  */
@@ -28,6 +29,13 @@ import {
 const app = express();
 const PORT = Number(process.env.PORT) || 8787;
 const BIND_ADDRESS = process.env.CACHE_BIND_ADDRESS || undefined;
+const AI_SCRIPT_LABEL_PREFIX = 'ai-label:';
+
+/** 人工标注可为 true 或 false，缺少记录时才返回 undefined。 */
+function readAiScriptLabel(bvid: string): boolean | undefined {
+  const value = kvGet(AI_SCRIPT_LABEL_PREFIX + bvid);
+  return value === null ? undefined : value === 'true';
+}
 
 // JSON 解析与体积限制（与 Worker 的 content-length 检查一致）
 app.use(express.json({ limit: MAX_BODY_SIZE }));
@@ -122,11 +130,12 @@ app.get('/api/ai-script/:bvid', (req, res) => {
   }
 
   const value = kvGet(AI_SCRIPT_KV_PREFIX + bvid);
+  const aiScriptLabel = readAiScriptLabel(bvid);
   if (!value) {
-    return res.json({ success: true, data: null, exists: false });
+    return res.json({ success: true, data: null, exists: false, aiScriptLabel });
   }
   try {
-    return res.json({ success: true, data: JSON.parse(value) as AiScriptRecord, exists: true });
+    return res.json({ success: true, data: JSON.parse(value) as AiScriptRecord, exists: true, aiScriptLabel });
   } catch {
     return errorResponse(res, '缓存数据格式错误', 500);
   }
@@ -149,6 +158,22 @@ app.post('/api/ai-script', (req, res) => {
   res.json({ success: true, data: { bvid: validated.bvid } });
 });
 
+// 每个视频只保留最后一次成功写入的人工标注。
+app.post('/api/ai-script-label', (req, res) => {
+  maybeCleanupRateLimit();
+  if (!checkRateLimit(`ai:label:${req.ip}`, RATE_LIMITS.saveAiScript)) {
+    return errorResponse(res, '请求过于频繁', 429);
+  }
+
+  const { bvid, isAiScript } = req.body ?? {};
+  if (!isValidBvid(bvid) || typeof isAiScript !== 'boolean') {
+    return errorResponse(res, '标注数据格式错误', 400);
+  }
+
+  kvPut(AI_SCRIPT_LABEL_PREFIX + bvid, JSON.stringify(isAiScript));
+  res.json({ success: true, data: { bvid, isAiScript } });
+});
+
 // POST /api/batch：批量查询广告与 AI 感评分（首页卡片标注用）
 app.post('/api/batch', (req, res) => {
   maybeCleanupRateLimit();
@@ -166,7 +191,7 @@ app.post('/api/batch', (req, res) => {
     return errorResponse(res, '包含非法的 BV 号', 400);
   }
 
-  const data: Record<string, { ad: AdRecord | null; aiScript: AiScriptRecord | null }> = {};
+  const data: Record<string, { ad: AdRecord | null; aiScript: AiScriptRecord | null; aiScriptLabel?: boolean }> = {};
   for (const bvid of bvids) {
     let ad: AdRecord | null = null;
     const adValue = kvGet(bvid);
@@ -189,7 +214,7 @@ app.post('/api/batch', (req, res) => {
       }
     }
 
-    data[bvid] = { ad, aiScript };
+    data[bvid] = { ad, aiScript, aiScriptLabel: readAiScriptLabel(bvid) };
   }
 
   res.json({ success: true, data });
