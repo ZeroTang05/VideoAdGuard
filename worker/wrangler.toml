@@ -3,6 +3,8 @@ main = "src/index.ts"
 compatibility_date = "2025-01-01"
 
 [observability]
+enabled = true
+
 [observability.logs]
 enabled = true
 invocation_logs = true
