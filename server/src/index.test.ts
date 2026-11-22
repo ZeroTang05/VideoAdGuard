@@ -79,6 +79,30 @@ describe('自建缓存服务 API', () => {
     expect(query.body.data.version).toBe(1); // 服务端写入的字段不被客户端数据冲掉
   });
 
+  it('同一个 BV 保存多个分 P，重测与旧版写入都保留其他分 P', async () => {
+    const bvid = 'BV17F411T7Ao';
+    const p1 = '25761288170';
+    const p2 = '25761349680';
+    const write = (body: object) => request(appWithDb).post('/api/cache/part').send({ ...adBody, bvid, ...body });
+    expect((await request(appWithDb).post('/api/cache').send({ ...adBody, bvid })).status).toBe(200);
+    expect((await write({ cid: p1, page: 1, adTimeRanges: [[20, 30]] })).status).toBe(200);
+    expect((await write({ cid: p2, page: 2, exist: false, adTimeRanges: [] })).status).toBe(200);
+    expect((await write({ cid: p1, page: 1, adTimeRanges: [[20, 40]] })).status).toBe(200);
+    expect((await write({ cid: '0', page: 1 })).status).toBe(400);
+
+    const query = await request(appWithDb).get(`/api/cache/${bvid}?parts=1`);
+    expect(query.body).toMatchObject({
+      data: { adTimeRanges: [[10, 30]] },
+      parts: { [p1]: { adTimeRanges: [[20, 40]] }, [p2]: { exist: false, adTimeRanges: [] } },
+    });
+    expect((await request(appWithDb).post('/api/cache').send({ ...adBody, bvid, adTimeRanges: [[60, 80]] })).status).toBe(200);
+    const legacy = await request(appWithDb).get(`/api/cache/${bvid}`);
+    expect(legacy.body.data.adTimeRanges).toEqual([[60, 80]]);
+    expect(legacy.body).not.toHaveProperty('parts');
+    const batch = await request(appWithDb).post('/api/batch').send({ bvids: [bvid] });
+    expect(batch.body.data[bvid].ad.adTimeRanges).toEqual([[20, 40]]);
+  });
+
   it('拒绝非法 BV 号与非法广告区间', async () => {
     const badBvid = await request(appWithDb).post('/api/cache').send({ ...adBody, bvid: 'av170001' });
     expect(badBvid.body.success).toBe(false);
@@ -119,6 +143,31 @@ describe('自建缓存服务 API', () => {
     const invalid = await request(appWithDb).post('/api/ai-script-label').send({ bvid, isAiScript: 'true' });
     expect(invalid.status).toBe(400);
     expect((await read()).body.aiScriptLabel).toBe(false);
+  });
+
+  it('模型评分和人工标注分别保存在各自的分 P', async () => {
+    const bvid = 'BV1B7411L7tE';
+    const p1 = '153700107';
+    const p2 = '153700561';
+    const score = (cid: string, page: number, aiScore: number) =>
+      request(appWithDb).post('/api/ai-script/part').send({ bvid, cid, page, aiScore });
+    const label = (cid: string, page: number, isAiScript: boolean) =>
+      request(appWithDb).post('/api/ai-script-label/part').send({ bvid, cid, page, isAiScript });
+    expect((await request(appWithDb).post('/api/ai-script-label').send({ bvid, isAiScript: true })).status).toBe(200);
+    expect((await score(p1, 1, 80)).status).toBe(200);
+    expect((await score(p2, 2, 20)).status).toBe(200);
+    expect((await label(p2, 2, true)).status).toBe(200);
+    expect((await label(p1, 1, true)).status).toBe(200);
+    expect((await label(p1, 1, false)).status).toBe(200);
+
+    const read = await request(appWithDb).get(`/api/ai-script/${bvid}?parts=1`);
+    expect(read.body).toMatchObject({
+      aiScriptLabel: true,
+      parts: { [p1]: { aiScore: 80 }, [p2]: { aiScore: 20 } },
+      aiScriptLabelParts: { [p1]: { isAiScript: false }, [p2]: { isAiScript: true } },
+    });
+    const batch = await request(appWithDb).post('/api/batch').send({ bvids: [bvid] });
+    expect(batch.body.data[bvid]).toMatchObject({ aiScriptLabel: false, aiScript: { aiScore: 80 } });
   });
 
   it('POST /api/batch 一次返回两类数据并过滤 inaccurate 广告', async () => {

@@ -1,5 +1,5 @@
 import './utils/logger';
-import { BilibiliService } from './services/bilibili';
+import { BilibiliService, type VideoPart } from './services/bilibili';
 import { AIService } from './services/ai';
 import { AI_SCRIPT_CRITERIA_VERSION } from './services/prompt';
 import { WhitelistService } from './services/whitelist';
@@ -7,12 +7,20 @@ import { AudioService } from './services/audio';
 import { CacheService } from './services/cache';
 import { CloudCacheService } from './services/cloud-cache';
 import { AiScriptCacheService } from './services/ai-script-cache';
+import { AiScriptBadge } from './services/ai-script-badge';
 import { isAutoSkipConfident } from './utils/ad-confidence';
 import { normalizeErrorForUser } from './utils/errors';
 import { sampleScriptText } from './utils/script-samples';
 import { parseAiStyleScore } from './utils/script-result';
 import { VideoCardAnnotator } from './services/video-card-annotator';
 import { getVideoCardScenarios, isBilibiliVideoPage } from './utils/video-page';
+
+/** 广告检测和文案评分共用当前播放分 P 的上下文。 */
+interface VideoRun {
+  part: VideoPart;
+  info: Awaited<ReturnType<typeof BilibiliService.getVideoInfo>>;
+  signal: AbortSignal;
+}
 
 // 新增：广告片段接口，用于支持交互状态
 interface AdSegment {
@@ -127,6 +135,10 @@ class AdDetector {
   private static adSegments: AdSegment[] = []; // 新增：存储详细的广告片段状态 (支持交互)
   private static validIndexLists: number[][] = []; // 存储原始广告索引区间
   private static userModifiedSegments: boolean = false; // 用户是否手动调整过广告区间
+  private static activeRun: VideoRun | null = null;
+  private static mediaRevisions = new WeakMap<HTMLVideoElement, number>();
+  private static renderedMedia: { part: VideoPart; video: HTMLVideoElement; src: string; revision: number } | null = null;
+  private static autoSkipVideo: HTMLVideoElement | null = null;
   private static timeUpdateListener: (() => void) | null = null; // 用于存储 timeupdate 监听器的引用
   private static adMarkerLayer: HTMLElement | null = null; // 添加标记层引用
   private static skipNotificationElement: HTMLElement | null = null; // 跳过提示元素引用
@@ -176,7 +188,9 @@ class AdDetector {
     throw new Error(normalizeErrorForUser('未找到视频ID', 'detection'));
   }
 
-  private static resetState() {
+  public static clear(leftVideoPage = false) {
+    this.activeRun = null;
+    if (leftVideoPage) this.renderedMedia = null;
     // 重置所有静态变量
     this.adDetectionResult = null;
     this.adTimeRanges = [];
@@ -207,41 +221,76 @@ class AdDetector {
    * 统一应用检测结果并初始化 UI（本地缓存、云端缓存、AI 检测三条路径共用）
    */
   private static async applyDetectionResult(
-    bvid: string,
+    run: VideoRun,
     result: { exist: boolean; goodName: string[]; adTimeRanges: number[][]; isDetectionConfident: boolean },
     source: 'local' | 'remote' | 'ai'
   ): Promise<void> {
+    if (run.signal.aborted) return;
     const sourceLabel = source === 'local' ? '缓存' : source === 'remote' ? '云端' : '';
+    const hasAd = result.exist && result.adTimeRanges.length > 0;
 
-    const videoElement = document.querySelector('video');
-
-    if (result.exist && result.adTimeRanges.length > 0) {
+    if (hasAd) {
       this.initAdSegments(result.adTimeRanges);
-
       this.adDetectionResult = (this.adDetectionResult ? this.adDetectionResult + ' | ' : '')
         + `发现${result.adTimeRanges.length}处广告${sourceLabel ? `（${sourceLabel}）` : ''}：${
           result.adTimeRanges.map(([start, end]) => `${this.second2time(start)}~${this.second2time(end)}`).join(' | ')
         }`;
-
-      if (videoElement) {
-        this.createAdMarkers(videoElement);
-
-        // 置信度由各来源在调用前统一计算（见 isAutoSkipConfident），此处直接应用
-        const { autoSkipAd } = await chrome.storage.local.get({ autoSkipAd: false });
-        if (autoSkipAd && result.isDetectionConfident) {
-          console.log(`【VideoAdGuard】设置自动跳过监听器${sourceLabel ? `（${sourceLabel}结果）` : ''}`);
-          this.setupAutoSkip(videoElement);
-        }
-      }
     } else {
       this.adDetectionResult = (this.adDetectionResult ? this.adDetectionResult + ' | ' : '')
         + `无广告内容${sourceLabel ? `（${sourceLabel}）` : ''}`;
       this.removeAutoSkipListener();
     }
 
-    // 检测流程完成后，无论是否有广告，都显示反馈按钮
-    if (videoElement) {
-      this.createSkipButton(videoElement, result.exist && result.adTimeRanges.length > 0);
+    const videoElement = await this.waitForVideo(run);
+    if (!videoElement || run.signal.aborted) return;
+    this.renderedMedia = {
+      part: run.part,
+      video: videoElement,
+      src: videoElement.currentSrc,
+      revision: this.mediaRevisions.get(videoElement) ?? 0,
+    };
+    this.createSkipButton(videoElement, run, hasAd);
+    if (hasAd) {
+      this.createAdMarkers(videoElement, run.signal);
+      // 置信度由检测及缓存读取各自按现有规则计算。
+      const { autoSkipAd } = await chrome.storage.local.get({ autoSkipAd: false });
+      if (!run.signal.aborted && autoSkipAd && result.isDetectionConfident) {
+        this.setupAutoSkip(videoElement);
+      }
+    }
+  }
+
+  /** 切 P 时播放器可能还在加载新媒体，等它报告当前分 P 的时长再绑定组件。 */
+  private static waitForVideo({ part, signal }: VideoRun): Promise<HTMLVideoElement | null> {
+    const previous = this.renderedMedia;
+    const ready = (video: HTMLVideoElement | null): video is HTMLVideoElement => Boolean(
+      video && video.readyState >= HTMLMediaElement.HAVE_METADATA && Number.isFinite(video.duration)
+      && !(previous?.video === video && previous.part.cid !== part.cid && previous.src === video.currentSrc
+        && previous.revision === (this.mediaRevisions.get(video) ?? 0))
+      && (part.duration <= 0 || Math.abs(video.duration - part.duration) <= 2),
+    );
+    const current = document.querySelector('video');
+    if (ready(current)) return Promise.resolve(current);
+
+    return new Promise(resolve => {
+      const finish = (video: HTMLVideoElement | null) => {
+        document.removeEventListener('loadedmetadata', onMetadata, true);
+        signal.removeEventListener('abort', onAbort);
+        resolve(video);
+      };
+      const onMetadata = (event: Event) => {
+        if (event.target instanceof HTMLVideoElement && ready(event.target)) finish(event.target);
+      };
+      const onAbort = () => finish(null);
+      document.addEventListener('loadedmetadata', onMetadata, true);
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
+  /** 分 P 时长可能相近，用媒体加载次数区分播放器复用的同一个元素。 */
+  public static recordVideoMetadata(event: Event): void {
+    if (event.target instanceof HTMLVideoElement) {
+      this.mediaRevisions.set(event.target, (this.mediaRevisions.get(event.target) ?? 0) + 1);
     }
   }
 
@@ -274,85 +323,47 @@ class AdDetector {
   }
 
   private static async persistAdSegmentsToCache() {
-    try {
-      const bvid = this.getBvidFromUrl();
-      // 用户手动修正广告区间时，标记 recordSource 为 'user'，同时标记为可信
-      const recordSource = this.userModifiedSegments ? 'user' : undefined;
-      const isConfident = this.userModifiedSegments ? true : undefined;
-      await CacheService.updateAdTimeRanges(bvid, this.adTimeRanges, recordSource, isConfident);
-    } catch (error) {
-      console.warn('【VideoAdGuard】手动调整广告区间未能同步缓存:', error);
-    }
+    const part = this.activeRun?.part;
+    if (!part) return;
+    const recordSource = this.userModifiedSegments ? 'user' : undefined;
+    const isConfident = this.userModifiedSegments ? true : undefined;
+    await CacheService.updateAdTimeRanges(part.bvid, part.cid, this.adTimeRanges, recordSource, isConfident);
   }
 
-
-  public static async analyze() {
+  public static async analyze(run: VideoRun) {
+    const { part, info: videoInfo, signal } = run;
+    const { bvid, cid, duration } = part;
+    this.activeRun = run;
     try {
-      // 检查插件是否启用（默认为启用，只有明确设置为 false 时才禁用）
-      const settings = await chrome.storage.local.get(['enableExtension', 'restrictedMode']);
-      if (settings.enableExtension === false) {
-        console.log('【VideoAdGuard】插件已禁用，跳过广告检测');
-        this.adDetectionResult = (this.adDetectionResult ? this.adDetectionResult + ' | ' : '') +'插件已禁用';
-        return;
-      }
+      const settings = await chrome.storage.local.get(['restrictedMode']);
+      if (signal.aborted) return;
 
-      // 在分析开始时先重置状态
-      this.resetState();
-
-      const bvid = this.getBvidFromUrl();
-
-      // 记录本次检测使用的模型信息，供云端缓存上传使用
       let llmMeta = { provider: 'unknown', model: 'unknown' };
-
-      // 清理过期缓存
       await CacheService.cleanExpiredCache();
-
-      // 先查找本地缓存
-      const cachedResult = await CacheService.getDetectionResult(bvid);
-      if (cachedResult) {
-        console.log('【VideoAdGuard】使用本地缓存的检测结果');
-        await this.applyDetectionResult(bvid, {
-          exist: cachedResult.exist,
-          goodName: cachedResult.goodName,
-          adTimeRanges: cachedResult.adTimeRanges,
-          isDetectionConfident: cachedResult.isDetectionConfident,
-        }, 'local');
+      const local = await CacheService.getDetectionResults(bvid, cid);
+      if (signal.aborted) return;
+      if (local.part && local.part.accuracy !== 'inaccurate') {
+        await this.applyDetectionResult(run, local.part, 'local');
         return;
       }
 
-      // 本地缓存未命中：并行查询云端缓存和视频信息
-      const [videoInfoResult, remoteCacheResult] = await Promise.allSettled([
-        BilibiliService.getVideoInfo(bvid),
-        CloudCacheService.fetchRemoteCache(bvid),
-      ]);
-
-      // 云端缓存命中 → 应用结果并写入本地缓存
-      if (remoteCacheResult.status === 'fulfilled' && remoteCacheResult.value) {
-        const remote = remoteCacheResult.value;
-        console.log('【VideoAdGuard】使用云端缓存的检测结果');
-
-        // 云端标志位可能因上传时视频未加载（duration 为 NaN）而不可靠，
-        // 这里基于当前视频重新计算，本地缓存与应用行为使用同一个值，避免首次访问与刷新后行为不一致
-        const videoElement = document.querySelector('video');
-        const isConfident = isAutoSkipConfident(remote.adTimeRanges, videoElement?.duration ?? NaN);
-
-        // 写入本地缓存（标记来源为 remote）
-        await CacheService.saveDetectionResult(bvid, remote.exist, remote.goodName, remote.adTimeRanges, isConfident, 'remote', remote.detectedAt, remote.model, remote.provider);
-
-        await this.applyDetectionResult(bvid, {
-          exist: remote.exist,
-          goodName: remote.goodName,
-          adTimeRanges: remote.adTimeRanges,
-          isDetectionConfident: isConfident,
-        }, 'remote');
+      // 优先找当前 P；旧 BV 缓存仍可按原规则用于跳过。
+      const remote = local.part ? undefined : await CloudCacheService.fetchRemoteCache(bvid, cid);
+      if (signal.aborted) return;
+      if (local.legacy && !local.part && !remote?.part) {
+        await this.applyDetectionResult(run, local.legacy, 'local');
         return;
       }
-
-      // 云端未命中，继续使用视频信息
-      if (videoInfoResult.status !== 'fulfilled') {
-        throw videoInfoResult.reason;
+      const record = remote?.part ?? remote?.legacy;
+      if (record && record.accuracy !== 'inaccurate') {
+        const isConfident = isAutoSkipConfident(record.adTimeRanges, duration);
+        await CacheService.saveDetectionResult(
+          bvid, remote?.part ? cid : undefined, record.exist, record.goodName, record.adTimeRanges,
+          isConfident, 'remote', record.detectedAt, record.model, record.provider,
+        );
+        await this.applyDetectionResult(run, { ...record, isDetectionConfident: isConfident }, 'remote');
+        return;
       }
-      const videoInfo = videoInfoResult.value;
 
       // 检查UP主是否在白名单中
       const isUPWhitelisted = await WhitelistService.isWhitelisted(videoInfo.owner.mid.toString());
@@ -363,10 +374,11 @@ class AdDetector {
       }
 
       const topComments = await BilibiliService.getTopComments(bvid);
+      if (signal.aborted) return;
       const topComment = topComments?.message || null;
       const jumpUrls = topComments?.jump_url || null;
       let jumpUrlMessages: Record<string, Record<string, any>> = {};
-      if(topComment && (Object.keys(jumpUrls).length===0 || jumpUrls===null)){
+      if (topComment && (!jumpUrls || Object.keys(jumpUrls).length === 0)) {
         jumpUrlMessages["置顶评论"] = {"是否有链接": false};
       }
       else if(jumpUrls) {
@@ -416,17 +428,19 @@ class AdDetector {
           }
         }
         // 如果没有检测到广告条件，则直接返回
+        if (signal.aborted) return;
         if (!hasAdCondition) {
           console.log('【VideoAdGuard】限制模式：未检测到广告条件，跳过大模型分析');
           this.adDetectionResult = (this.adDetectionResult ? this.adDetectionResult + ' | ' : '') + '未检测到广告条件';
           this.removeAutoSkipListener();
           // 保存无广告结果到缓存
-          await CacheService.saveDetectionResult(bvid, false, [], [], false);
+          await CacheService.saveDetectionResult(bvid, cid, false, [], [], false);
           return;
         }
       }
 
-      const playerInfo = await BilibiliService.getPlayerInfo(bvid, videoInfo.cid);
+      const playerInfo = await BilibiliService.getPlayerInfo(bvid, cid);
+      if (signal.aborted) return;
 
       // 获取字幕数据 - 统一的数据结构
       let captions: Record<number, string> = {};
@@ -452,7 +466,8 @@ class AdDetector {
           console.log('【VideoAdGuard】无官方字幕，尝试音频识别');
           try {
             // 使用完整的音频处理和识别流程
-            const playUrlInfo = await BilibiliService.getPlayUrl(bvid, videoInfo.cid);
+            const playUrlInfo = await BilibiliService.getPlayUrl(bvid, cid);
+            if (signal.aborted) return;
             const result = await AudioService.processAndTranscribeAudio(playUrlInfo, {
               responseFormat: 'verbose_json'
             });
@@ -493,6 +508,7 @@ class AdDetector {
               console.log('【VideoAdGuard】音频处理和识别失败');
             }
           } catch (error) {
+            if (signal.aborted) return;
             console.log('【VideoAdGuard】音频识别失败:', error);
             this.adDetectionResult =
               (this.adDetectionResult ? this.adDetectionResult + ' | ' : '') +
@@ -502,6 +518,7 @@ class AdDetector {
           console.log('【VideoAdGuard】音频识别功能未启用');
         }
 
+        if (signal.aborted) return;
         // 如果最终没有获取到任何字幕数据
         if (Object.keys(captions).length === 0) {
           console.log('【VideoAdGuard】当前视频无字幕且无法进行音频识别，无法检测');
@@ -510,13 +527,14 @@ class AdDetector {
         }
       }
 
+      if (signal.aborted) return;
       // 限制模式处理逻辑
       let rawResult;
       if (isRestrictedMode && hasAdCondition) {
         console.log('【VideoAdGuard】限制模式：检测到可能存在广告，调用大模型进行详细分析...');
         console.log('【VideoAdGuard】限制模式：预提取的商品名称:', good_name);
         const restrictResult = await AIService.detectAdRestricted({
-          title: videoInfo.title,
+          title: part.title,
           topComment: topComment,
           additionalMessages: jumpUrlMessages,
           captions: captions,
@@ -528,7 +546,7 @@ class AdDetector {
         // 正常模式：使用统一的captions数据进行AI分析
         console.log('【VideoAdGuard】开始AI广告检测分析...');
         const normalResult = await AIService.detectAd({
-          title: videoInfo.title,
+          title: part.title,
           topComment: topComment,
           additionalMessages: jumpUrlMessages,
           captions: captions
@@ -537,6 +555,7 @@ class AdDetector {
         llmMeta = { provider: normalResult.provider, model: normalResult.model };
       }
 
+      if (signal.aborted) return;
       // 处理可能的转义字符并解析 JSON
       let result;
       try {
@@ -599,16 +618,13 @@ class AdDetector {
         }
         const second_lists = this.index2second(mergedIndexLists, captionsData!.body);
 
-        const videoElement = document.querySelector('video');
-        const videoDuration = videoElement ? videoElement.duration : 0;
+        const isDetectionConfident = isAutoSkipConfident(second_lists, duration);
 
-        const isDetectionConfident = isAutoSkipConfident(second_lists, videoDuration);
-
-        await CacheService.saveDetectionResult(bvid, true, result.good_name || [], second_lists, isDetectionConfident, 'local', undefined, llmMeta.model, llmMeta.provider);
+        await CacheService.saveDetectionResult(bvid, cid, true, result.good_name || [], second_lists, isDetectionConfident, 'local', undefined, llmMeta.model, llmMeta.provider);
 
         // 异步上传云端缓存（不 await，不阻塞）；低置信度结果不上传，避免不可信的广告区间污染共享缓存
         if (isDetectionConfident) {
-          void CloudCacheService.saveRemoteCache(bvid, {
+          void CloudCacheService.saveRemoteCache(part, {
             exist: true,
             goodName: result.good_name || [],
             adTimeRanges: second_lists,
@@ -622,7 +638,7 @@ class AdDetector {
           });
         }
 
-        await this.applyDetectionResult(bvid, {
+        await this.applyDetectionResult(run, {
           exist: true,
           goodName: result.good_name || [],
           adTimeRanges: second_lists,
@@ -633,18 +649,11 @@ class AdDetector {
         console.log('【VideoAdGuard】无广告内容');
         this.removeAutoSkipListener();
 
-        await CacheService.saveDetectionResult(bvid, false, [], [], false);
+        await CacheService.saveDetectionResult(bvid, cid, false, [], [], false);
 
         // 同步调用 applyDetectionResult 确保反馈按钮被创建
-        await this.applyDetectionResult(bvid, {
-          exist: false,
-          goodName: [],
-          adTimeRanges: [],
-          isDetectionConfident: false,
-        }, 'ai');
-
         // 异步上传无广告结果到云端
-        void CloudCacheService.saveRemoteCache(bvid, {
+        void CloudCacheService.saveRemoteCache(part, {
           exist: false,
           goodName: [],
           adTimeRanges: [],
@@ -656,9 +665,16 @@ class AdDetector {
           source: 'ai',
           version: 1,
         });
+        await this.applyDetectionResult(run, {
+          exist: false,
+          goodName: [],
+          adTimeRanges: [],
+          isDetectionConfident: false,
+        }, 'ai');
       }
 
     } catch (error) {
+      if (signal.aborted) return;
       console.warn('【VideoAdGuard】AI分析失败:', error);
       this.adDetectionResult =
         (this.adDetectionResult ? this.adDetectionResult + ' | ' : '') +
@@ -688,7 +704,8 @@ class AdDetector {
   }
 
   // 带重试机制的创建广告标记层方法
-  private static createAdMarkersWithRetry(videoElement: HTMLVideoElement, retryCount: number): void {
+  private static createAdMarkersWithRetry(videoElement: HTMLVideoElement, signal: AbortSignal, retryCount: number): void {
+    if (signal.aborted) return;
     const maxRetries = 5;
 
     if (retryCount >= maxRetries) {
@@ -699,17 +716,17 @@ class AdDetector {
     const progressWrap = this.waitForProgressWrap();
     if (!progressWrap) {
       setTimeout(() => {
-        this.createAdMarkersWithRetry(videoElement, retryCount + 1);
+        this.createAdMarkersWithRetry(videoElement, signal, retryCount + 1);
       }, 2000); // 每次重试间隔2秒
       return;
     }
 
     // 找到进度条容器，继续创建标记
-    this.createAdMarkersInternal(videoElement, progressWrap);
+    this.createAdMarkersInternal(videoElement, progressWrap, signal);
   }
 
   // 创建广告标记层的方法
-  private static createAdMarkers(videoElement: HTMLVideoElement): void {
+  private static createAdMarkers(videoElement: HTMLVideoElement, signal: AbortSignal): void {
 
     // 清除已有标记层
     this.removeAdMarkers();
@@ -720,19 +737,19 @@ class AdDetector {
       console.log('【VideoAdGuard】未找到进度条容器，尝试延迟创建广告标记');
       // 延迟重试
       setTimeout(() => {
-        this.createAdMarkersWithRetry(videoElement, 0);
+        this.createAdMarkersWithRetry(videoElement, signal, 0);
       }, 1000);
       return;
     }
 
     // 直接创建标记
-    this.createAdMarkersInternal(videoElement, progressWrap);
+    this.createAdMarkersInternal(videoElement, progressWrap, signal);
   }
 
   /**
    * 内部创建广告标记的实际逻辑 (增强版：支持点击切换、拖动、调整大小)
    */
-  private static createAdMarkersInternal(videoElement: HTMLVideoElement, progressWrap: Element): void {
+  private static createAdMarkersInternal(videoElement: HTMLVideoElement, progressWrap: Element, signal: AbortSignal): void {
     // 创建广告标记层
     const adMarkerLayer = document.createElement('div');
     adMarkerLayer.className = 'ad-marker-layer10032'; // 添加唯一标识
@@ -821,8 +838,8 @@ class AdDetector {
             marker.style.cursor = 'grabbing';
           }
 
-          document.addEventListener('mousemove', onMouseMove);
-          document.addEventListener('mouseup', onMouseUp);
+          document.addEventListener('mousemove', onMouseMove, { signal });
+          document.addEventListener('mouseup', onMouseUp, { signal });
         };
 
         const onMouseMove = (e: MouseEvent) => {
@@ -1046,7 +1063,7 @@ class AdDetector {
     return `${hour > 0 ? hour + ':' : ''}${min.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
   }
 
-  private static createSkipButton(videoElement: HTMLVideoElement, hasAd: boolean = true) {
+  private static createSkipButton(videoElement: HTMLVideoElement, { part, signal }: VideoRun, hasAd: boolean) {
     // 移除已有的跳过按钮
     this.removeSkipButton();
 
@@ -1139,51 +1156,48 @@ class AdDetector {
     });
 
     feedbackButton.addEventListener('click', async () => {
-      const bvid = this.getBvidFromUrl();
-      if (bvid) {
-        // 检查用户是否手动调整过广告区间
-        const isUserModified = this.userModifiedSegments;
+      if (signal.aborted) return;
+      const { bvid, cid } = part;
+      const isUserModified = this.userModifiedSegments;
+      const ranges = this.adTimeRanges;
+      const cache = await CacheService.getDetectionResults(bvid, cid);
+      const cachedRecord = cache.part ?? cache.legacy;
+      const source = cachedRecord?.recordSource || (isUserModified ? 'user' : 'ai');
 
-        // 获取本地缓存以发送完整的云端数据
-        const cachedRecord = await CacheService.getDetectionResult(bvid);
+      const success = await CloudCacheService.saveRemoteCache(part, {
+        exist: ranges.length > 0,
+        goodName: cachedRecord?.goodName || [],
+        adTimeRanges: ranges,
+        model: cachedRecord?.model || 'unknown',
+        provider: cachedRecord?.provider || 'unknown',
+        detectedAt: cachedRecord?.detectedAt || Date.now(),
+        isDetectionConfident: cachedRecord?.isDetectionConfident ?? false,
+        accuracy: isUserModified ? 'accurate' : 'inaccurate',
+        source,
+        version: 1,
+      });
 
-        // 直接使用本地缓存的 recordSource 作为云端的 source
-        const source = cachedRecord?.recordSource || (this.userModifiedSegments ? 'user' : 'ai');
-
-        const success = await CloudCacheService.saveRemoteCache(bvid, {
-          exist: cachedRecord?.exist ?? this.adTimeRanges.length > 0,
-          goodName: cachedRecord?.goodName || [],
-          adTimeRanges: this.adTimeRanges,
-          model: cachedRecord?.model || 'unknown',
-          provider: cachedRecord?.provider || 'unknown',
-          detectedAt: cachedRecord?.detectedAt || Date.now(),
-          isDetectionConfident: cachedRecord?.isDetectionConfident ?? false,
-          accuracy: isUserModified ? 'accurate' : 'inaccurate',
-          source,
-          version: 1,
-        });
-
-        if (success) {
-          if (!isUserModified) {
-            // 仅在非用户修正情况下标记本地缓存为不准确
-            await CacheService.markAsInaccurate(bvid);
-          }
-          feedbackButton.textContent = isUserModified ? '✓ 已提交修正' : '✓ 反馈成功';
-          feedbackButton.style.background = 'rgba(100, 200, 100, 0.9)';
-          feedbackButton.style.color = 'white';
-          feedbackButton.style.borderColor = 'rgba(255, 255, 255, 0.8)';
-          feedbackButton.style.width = 'auto';
-          feedbackButton.style.padding = '0 12px';
-          setTimeout(() => {
-            feedbackButton.textContent = '';
-            feedbackButton.innerHTML = '&#x2717;';
-            feedbackButton.style.background = 'rgba(0, 0, 0, 0.8)';
-            feedbackButton.style.color = 'rgba(255, 255, 255, 0.7)';
-            feedbackButton.style.borderColor = 'rgba(255, 255, 255, 0.3)';
-            feedbackButton.style.width = '32px';
-            feedbackButton.style.padding = '0';
-          }, 2000);
+      if (success) {
+        if (!isUserModified) {
+          // 仅在非用户修正情况下标记本地缓存为不准确
+          await CacheService.markAsInaccurate(bvid, cid);
         }
+        if (signal.aborted) return;
+        feedbackButton.textContent = isUserModified ? '✓ 已提交修正' : '✓ 反馈成功';
+        feedbackButton.style.background = 'rgba(100, 200, 100, 0.9)';
+        feedbackButton.style.color = 'white';
+        feedbackButton.style.borderColor = 'rgba(255, 255, 255, 0.8)';
+        feedbackButton.style.width = 'auto';
+        feedbackButton.style.padding = '0 12px';
+        setTimeout(() => {
+          feedbackButton.textContent = '';
+          feedbackButton.innerHTML = '&#x2717;';
+          feedbackButton.style.background = 'rgba(0, 0, 0, 0.8)';
+          feedbackButton.style.color = 'rgba(255, 255, 255, 0.7)';
+          feedbackButton.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+          feedbackButton.style.width = '32px';
+          feedbackButton.style.padding = '0';
+        }, 2000);
       }
     });
 
@@ -1289,14 +1303,16 @@ class AdDetector {
     };
 
     // 添加事件监听
+    this.autoSkipVideo = videoElement;
     videoElement.addEventListener('timeupdate', this.timeUpdateListener);
     console.log("【VideoAdGuard】已添加 timeupdate 监听器用于自动跳过");
   }
 
   // 移除自动跳过监听器的方法
   private static removeAutoSkipListener() {
-    const videoElement = document.querySelector('video');
+    const videoElement = this.autoSkipVideo;
     if (videoElement && this.timeUpdateListener) {
+      this.autoSkipVideo = null;
       videoElement.removeEventListener('timeupdate', this.timeUpdateListener);
       console.log("【VideoAdGuard】已移除 timeupdate 监听器");
       this.timeUpdateListener = null;
@@ -1311,41 +1327,56 @@ class AdDetector {
  * 判断通道跟随设置中的服务商——System One 走真概率阈值组合，其余走 prompt 整数评分。
  */
 class AIScriptDetector {
-  private static badgeElement: HTMLElement | null = null;
+  private static badge: AiScriptBadge | null = null;
 
-  public static async analyze() {
+  public static clear(): void {
+    this.badge?.remove();
+    this.badge = null;
+  }
+
+  /** 换视频或读到人工标注后，旧的异步评分流程不再更新页面。 */
+  private static canScore(badge: AiScriptBadge): boolean {
+    return this.badge === badge && !badge.hasManualLabel;
+  }
+
+  public static async analyze({ part, info: videoInfo, signal }: VideoRun) {
+    const { bvid, cid, page } = part;
+    const badge = new AiScriptBadge(part);
+    this.badge = badge;
     try {
-      const settings = await chrome.storage.local.get(['enableExtension']);
-      if (settings.enableExtension === false) return;
-
-      const bvid = AdDetector.getBvidFromUrl();
-
-      // 三层查找与广告检测一致：本地缓存 → 云端缓存 → AI 检测
-      const cached = await AiScriptCacheService.get(bvid);
-      if (cached) {
-        console.log('【VideoAdGuard】AI 感评分：使用本地缓存');
-        this.showBadge(cached.aiScore, cached.provider, cached.model, 'local');
+      const cached = await AiScriptCacheService.get(bvid, cid, page);
+      if (!this.canScore(badge)) return;
+      const remote = await CloudCacheService.fetchRemoteAIScript(part, Boolean(cached.part));
+      if (!this.canScore(badge)) return;
+      if (remote?.source === 'user') {
+        badge.showLabel(remote.isAiScript);
         return;
       }
 
-      const remote = await CloudCacheService.fetchRemoteAIScript(bvid);
-      if (remote) {
-        console.log('【VideoAdGuard】AI 感评分：使用云端缓存');
-        await AiScriptCacheService.save(bvid, {
-          aiScore: remote.aiScore,
-          criteriaVersion: remote.criteriaVersion,
-          model: remote.model,
-          provider: remote.provider,
-          detectedAt: remote.detectedAt,
-          source: 'remote',
-        });
-        this.showBadge(remote.aiScore, remote.provider, remote.model, 'remote');
+      const localScore = cached.part ?? (remote?.matchedPart ? undefined : cached.legacy);
+      if (localScore) {
+        badge.showScore(localScore.aiScore, localScore.provider, localScore.model, 'local');
         return;
       }
 
-      const videoInfo = await BilibiliService.getVideoInfo(bvid);
-      const playerInfo = await BilibiliService.getPlayerInfo(bvid, videoInfo.cid);
+      if (remote?.source === 'ai') {
+        const { record } = remote;
+        badge.showScore(record.aiScore, record.provider, record.model, 'remote');
+        if (remote.matchedPart) {
+          await AiScriptCacheService.save(bvid, cid, {
+            aiScore: record.aiScore,
+            criteriaVersion: record.criteriaVersion,
+            model: record.model,
+            provider: record.provider,
+            detectedAt: record.detectedAt,
+            source: 'remote',
+          });
+        }
+        return;
+      }
 
+      const playerInfo = await BilibiliService.getPlayerInfo(bvid, cid);
+      if (!this.canScore(badge)) return;
       if (!playerInfo.subtitle?.subtitles?.length) {
         console.log('【VideoAdGuard】AI 感评分：视频无字幕，跳过');
         return;
@@ -1364,13 +1395,15 @@ class AIScriptDetector {
         return;
       }
 
+      if (!this.canScore(badge)) return;
       console.log('【VideoAdGuard】开始 AI 感评分（标题+简介+字幕抽样）');
       const result = await AIService.detectAIScript({
-        title: videoInfo.title,
+        title: part.title,
         description: videoInfo.desc || '',
         sample,
       });
 
+      if (!this.canScore(badge)) return;
       const score = parseAiStyleScore(result.text);
       if (score === null) throw new Error(normalizeErrorForUser('AI 感评分返回数据格式错误', 'detection'));
 
@@ -1382,10 +1415,10 @@ class AIScriptDetector {
         detectedAt: Date.now(),
         source: 'local' as const,
       };
-      await AiScriptCacheService.save(bvid, record);
+      await AiScriptCacheService.save(bvid, cid, record);
 
       // 异步上传云端共享（不 await，不阻塞显示）
-      void CloudCacheService.saveRemoteAIScript(bvid, {
+      void CloudCacheService.saveRemoteAIScript(part, {
         aiScore: record.aiScore,
         criteriaVersion: record.criteriaVersion,
         model: record.model,
@@ -1394,58 +1427,13 @@ class AIScriptDetector {
       });
 
       console.log('【VideoAdGuard】AI 感评分结果:', { score, provider: result.provider, model: result.model });
-      this.showBadge(score, record.provider, record.model, 'ai');
+      if (this.canScore(badge)) badge.showScore(score, record.provider, record.model, 'ai');
     } catch (error) {
+      if (signal.aborted) return;
       console.warn('【VideoAdGuard】AI 感评分失败:', error);
-      this.removeBadge();
     }
   }
 
-  /** 在视频信息行（播放量/弹幕/日期）末尾插入角标，未渲染时延迟重试 */
-  private static showBadge(score: number, provider: string, model: string, source: 'local' | 'remote' | 'ai', retryCount = 0): void {
-    const detailList = document.querySelector('.video-info-detail-list.video-info-detail-content');
-
-    if (!detailList) {
-      if (retryCount >= 5) {
-        console.log('【VideoAdGuard】未找到视频信息行容器，放弃显示 AI 感角标');
-        return;
-      }
-      setTimeout(() => this.showBadge(score, provider, model, source, retryCount + 1), 1000);
-      return;
-    }
-
-    this.removeBadge();
-    // 分数分级配色：高→B站粉，中→橙，低→灰
-    const color = score >= 70 ? '#f25d8e' : score >= 40 ? '#ff7f24' : '#9499a0';
-    const sourceLabel = source === 'local' ? '本地缓存' : source === 'remote' ? '云端共享' : 'AI 检测';
-
-    const badge = document.createElement('span');
-    badge.className = 'ai-script-badge10032';
-    badge.textContent = `AI 感 ${score}/100`;
-    badge.title = `AI 风格评分 ${score}/100（模式化、冗余、抽象化等特征强度）\n来源: ${provider} / ${model}（${sourceLabel}）`;
-    badge.style.cssText = `
-      display: inline-flex;
-      align-items: center;
-      align-self: center;
-      padding: 2px 8px;
-      margin-left: 12px;
-      border-radius: 6px;
-      font-size: 12px;
-      font-weight: 600;
-      white-space: nowrap;
-      color: ${color};
-      background: ${color}1a;
-      border: 1px solid ${color}55;
-    `;
-    detailList.appendChild(badge);
-    this.badgeElement = badge;
-  }
-
-  private static removeBadge(): void {
-    this.badgeElement?.remove();
-    this.badgeElement = null;
-    document.querySelectorAll('.ai-script-badge10032').forEach((element) => element.remove());
-  }
 }
 
 // 消息监听器：
@@ -1467,35 +1455,75 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   }
 });
 
-// 页面加载监听：视频页跑广告/AI感评分，视频入口页（首页/热门/搜索/动态等）启动卡片标注
-window.addEventListener('load', () => {
-  if (isBilibiliVideoPage(location.href)) {
-    AdDetector.analyze();
-    AIScriptDetector.analyze();
-  } else if (getVideoCardScenarios(location.href).length > 0) {
-    VideoCardAnnotator.start();
-  }
-});
+// 统一处理初次进入、同 BV 切 P、前进后退和自动连播的地址变化。
+let lastUrl = '';
+let activeRoute: { bvid: string; page: number; controller: AbortController } | null = null;
+let videoInfoRequest: { bvid: string; info: ReturnType<typeof BilibiliService.getVideoInfo> } | undefined;
 
-// 添加 URL 变化监听
-let lastUrl = location.href;
-
-
-new MutationObserver(() => {
+async function refreshVideoPage() {
   const url = location.href;
-  if (url !== lastUrl) {
-    const currentBvid = isBilibiliVideoPage(url) ? AdDetector.getBvidFromUrl(url) : null;
-    const previousBvid = isBilibiliVideoPage(lastUrl) ? AdDetector.getBvidFromUrl(lastUrl) : null;
+  if (lastUrl === url) return;
+  lastUrl = url;
 
-    lastUrl = url;
-
-    // 只有当BV号发生变化时才触发检测逻辑
-    if (currentBvid && currentBvid !== previousBvid) {
-      console.log('【VideoAdGuard】URL changed with different BV:', url, 'Previous BV:', previousBvid, 'Current BV:', currentBvid);
-      AdDetector.analyze();
-      AIScriptDetector.analyze();
-    } else {
-      console.log('【VideoAdGuard】URL changed but BV unchanged, skipping detection:', url);
+  let route: { bvid: string; page: number } | undefined;
+  if (isBilibiliVideoPage(url)) {
+    const page = Number(new URL(url).searchParams.get('p') ?? 1);
+    if (Number.isSafeInteger(page) && page > 0) {
+      try {
+        route = { bvid: AdDetector.getBvidFromUrl(url), page };
+      } catch (error) {
+        console.warn('【VideoAdGuard】无法识别当前视频:', error);
+      }
     }
   }
-}).observe(document, { subtree: true, childList: true });
+  if (activeRoute && route?.bvid === activeRoute.bvid && route.page === activeRoute.page) return;
+
+  activeRoute?.controller.abort();
+  if (activeRoute) {
+    AdDetector.clear(!route);
+    AIScriptDetector.clear();
+  }
+  activeRoute = null;
+  if (!route) {
+    videoInfoRequest = undefined;
+    if (getVideoCardScenarios(url).length > 0) VideoCardAnnotator.start();
+    return;
+  }
+
+  const { bvid, page } = route;
+  const controller = new AbortController();
+  const { signal } = controller;
+  activeRoute = { ...route, controller };
+
+  try {
+    const { enableExtension } = await chrome.storage.local.get(['enableExtension']);
+    if (signal.aborted || enableExtension === false) return;
+    if (videoInfoRequest?.bvid !== bvid) {
+      videoInfoRequest = { bvid, info: BilibiliService.getVideoInfo(bvid) };
+    }
+    const request = videoInfoRequest;
+    const info = await request.info;
+    if (signal.aborted) return;
+    const part = BilibiliService.resolveVideoPart(bvid, page, info);
+    console.log(`【VideoAdGuard】当前分 P: ${bvid} P${page}（cid ${part.cid}）`);
+    const run = { part, info, signal };
+    void AdDetector.analyze(run);
+    void AIScriptDetector.analyze(run);
+  } catch (error) {
+    if (signal.aborted) return;
+    videoInfoRequest = undefined;
+    AdDetector.adDetectionResult = normalizeErrorForUser(error, 'detection');
+    console.warn('【VideoAdGuard】未能加载当前分 P:', error);
+  }
+}
+
+function onVideoPageChange() {
+  void refreshVideoPage();
+}
+
+window.addEventListener('load', onVideoPageChange);
+window.addEventListener('popstate', onVideoPageChange);
+document.addEventListener('loadstart', onVideoPageChange, true);
+document.addEventListener('loadedmetadata', event => AdDetector.recordVideoMetadata(event), true);
+new MutationObserver(onVideoPageChange).observe(document, { subtree: true, childList: true });
+onVideoPageChange();

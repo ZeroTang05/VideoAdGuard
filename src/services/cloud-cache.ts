@@ -1,40 +1,33 @@
 import { RemoteAdRecord, RemoteAiScriptRecord } from '../types/cloud-cache';
 import { AI_SCRIPT_CRITERIA_VERSION } from './prompt';
+import type { VideoPart } from './bilibili';
 
 /** 首页批量查询返回的单视频数据 */
 export interface RemoteBatchItem {
   ad: RemoteAdRecord | null;
   aiScript: RemoteAiScriptRecord | null;
+  aiScriptLabel?: boolean;
 }
+
+export type RemoteAiScriptResult =
+  | { source: 'user'; isAiScript: boolean }
+  | { source: 'ai'; record: RemoteAiScriptRecord; matchedPart: boolean };
 
 const CLIENT_VERSION = '1.4.3';
 
 // Cloudflare Worker 端点（兜底）
 const DEFAULT_WORKER_URL = 'https://videoadguard-api.0100320.xyz';
 
-// 自建服务器端点：部署 server/ 目录的服务后填入（如 https://cache.example.com）。
-// 留空时插件只用 Cloudflare，行为与旧版完全一致。
-const SELF_HOSTED_API_URL = '';
+// 自建服务器端点：留空时只使用 Cloudflare。
+const SELF_HOSTED_API_URL = 'https://vag-api.xiaobaozi.cn';
 
 interface WorkerResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
-}
-
-interface CacheQueryResponse {
-  bvid: string;
-  exist: boolean;
-  goodName: string[];
-  adTimeRanges: number[][];
-  model: string;
-  provider: string;
-  detectedAt: number;
-  isDetectionConfident: boolean;
-  accuracy: 'accurate' | 'inaccurate';
-  source: 'ai' | 'user';
-  version: number;
-  clientVersion?: string;
+  aiScriptLabel?: boolean;
+  parts?: Record<string, unknown>;
+  aiScriptLabelParts?: Record<string, { isAiScript: boolean }>;
 }
 
 export class CloudCacheService {
@@ -86,25 +79,27 @@ export class CloudCacheService {
 
   /**
    * 顺序尝试各端点读取，返回第一个命中的响应。
-   * 命中判定 isHit 为 false（未命中）或请求失败时继续尝试下一端点。
-   * @returns 最后一次成功响应（可能未命中），全部失败返回 null
+   * 批量查询需要区分“没有任何标签”和“请求失败”，可显式保留成功但未命中的响应。
    */
   private static async fetchFirstHit(
     path: string,
-    isHit: (data: unknown) => boolean,
-    method: 'GET' | 'POST' = 'GET',
-    body?: Record<string, unknown>
+    isHit: (response: WorkerResponse) => boolean,
+    { method = 'GET', body, acceptMiss = false, selfHostedOnly = false }: {
+      method?: 'GET' | 'POST';
+      body?: Record<string, unknown>;
+      acceptMiss?: boolean;
+      selfHostedOnly?: boolean;
+    } = {}
   ): Promise<WorkerResponse | null> {
-    let lastResponse: WorkerResponse | null = null;
-    for (const base of await this.getEndpoints()) {
+    let lastMiss: WorkerResponse | null = null;
+    const endpoints = selfHostedOnly ? [SELF_HOSTED_API_URL].filter(Boolean) : await this.getEndpoints();
+    for (const base of endpoints) {
       const result = await this.fetchWorker(`${base}${path}`, method, body);
-      if (result?.success && isHit(result.data)) {
-        return result;
-      }
-      if (result) lastResponse = result;
-      // 请求失败（null）继续尝试下一个端点
+      if (!result?.success) continue;
+      if (isHit(result)) return result;
+      if (acceptMiss) lastMiss = result;
     }
-    return lastResponse;
+    return lastMiss;
   }
 
   /**
@@ -137,52 +132,38 @@ export class CloudCacheService {
   /**
    * 从云端查询广告缓存（自有服务器优先，Cloudflare 兜底）
    */
-  static async fetchRemoteCache(bvid: string): Promise<RemoteAdRecord | null> {
-    console.log(`【VideoAdGuard】[CloudCache] 查询云端缓存: ${bvid}`);
-
-    const result = await this.fetchFirstHit(
-      `/api/cache/${encodeURIComponent(bvid)}`,
-      (data) => Boolean((data as CacheQueryResponse)?.adTimeRanges)
-    );
-
-    if (!result?.success) {
-      console.warn(`【VideoAdGuard】[CloudCache] 请求失败: ${result?.error}`);
-      return null;
-    }
-
-    try {
-      const record = result.data as RemoteAdRecord;
-      if (record.bvid !== bvid || !Array.isArray(record.adTimeRanges)) {
-        console.warn(`【VideoAdGuard】[CloudCache] 云端数据格式异常: ${bvid}`);
-        return null;
-      }
-      console.log(`【VideoAdGuard】[CloudCache] 云端缓存命中: ${bvid}, 广告区间: ${record.adTimeRanges.length}段, 来源: ${record.source}`);
-      return record;
-    } catch {
-      console.warn(`【VideoAdGuard】[CloudCache] 解析云端数据失败: ${bvid}`);
-      return null;
-    }
+  static async fetchRemoteCache(bvid: string, cid: string) {
+    let legacy: RemoteAdRecord | undefined;
+    const path = `/api/cache/${encodeURIComponent(bvid)}?parts=1`;
+    const result = await this.fetchFirstHit(path, ({ data, parts }) => {
+      const record = data as RemoteAdRecord | null;
+      if (!legacy && record?.bvid === bvid && Array.isArray(record.adTimeRanges)) legacy = record;
+      return Boolean(parts?.[cid]);
+    });
+    return { part: result?.parts?.[cid] as RemoteAdRecord | undefined, legacy };
   }
 
   /**
    * 保存检测结果到云端（双写：自有服务器 + Cloudflare）
    *
-   * @param bvid 视频 BV 号
+   * @param part 当前分 P
    * @param record 检测结果记录（accuracy 字段由调用方决定）
    */
   static async saveRemoteCache(
-    bvid: string,
+    { bvid, cid, page }: VideoPart,
     record: Omit<RemoteAdRecord, 'bvid'>
   ): Promise<boolean> {
     const body: Record<string, unknown> = {
       ...record,
       bvid,
+      cid,
+      page,
       clientVersion: CLIENT_VERSION,
     };
 
     console.log(`【VideoAdGuard】[CloudCache] 保存: ${bvid}, 来源: ${body.source}, accuracy: ${body.accuracy}`);
 
-    return this.saveToAll('/api/cache', body, `广告缓存 ${bvid}`);
+    return this.saveToAll('/api/cache/part', body, `广告缓存 ${bvid}`);
   }
 
   /**
@@ -195,9 +176,10 @@ export class CloudCacheService {
     const result = await this.fetchFirstHit(
       '/api/batch',
       // 命中 = 至少一个视频有数据；两边都全空也返回最后一次成功响应
-      (data) => Object.values((data as Record<string, RemoteBatchItem>) || {}).some((item) => item?.ad || item?.aiScript),
-      'POST',
-      { bvids: bvids.slice(0, 30) }
+      ({ data }) => Object.values((data as Record<string, RemoteBatchItem>) || {}).some(
+        (item) => item?.ad || item?.aiScript || typeof item?.aiScriptLabel === 'boolean'
+      ),
+      { method: 'POST', body: { bvids: bvids.slice(0, 30) }, acceptMiss: true }
     );
 
     if (!result?.success || !result.data) {
@@ -208,42 +190,50 @@ export class CloudCacheService {
     return result.data as Record<string, RemoteBatchItem>;
   }
 
-  /**
-   * 从云端查询 AI 感评分（自有服务器优先，Cloudflare 兜底）
-   */
-  static async fetchRemoteAIScript(bvid: string): Promise<RemoteAiScriptRecord | null> {
-    const result = await this.fetchFirstHit(
-      `/api/ai-script/${encodeURIComponent(bvid)}`,
-      (data) => {
-        const record = data as RemoteAiScriptRecord | null;
-        // 旧格式记录与旧评分标准的记录视为未命中，继续查下一端点
-        return Boolean(record && record.bvid === bvid
-          && typeof record.aiScore === 'number'
-          && record.criteriaVersion === AI_SCRIPT_CRITERIA_VERSION);
-      }
+  /** 人工标注优先，历史 BV 评分只对应 P1。 */
+  static async fetchRemoteAIScript({ bvid, cid, page }: VideoPart, hasLocalScore: boolean): Promise<RemoteAiScriptResult | null> {
+    let matched: RemoteAiScriptResult | undefined;
+    let legacy: RemoteAiScriptResult | undefined;
+    const isCurrentScore = (item: unknown): item is RemoteAiScriptRecord => {
+      const score = item as RemoteAiScriptRecord | null;
+      return Boolean(score && score.bvid === bvid && typeof score.aiScore === 'number'
+        && score.criteriaVersion === AI_SCRIPT_CRITERIA_VERSION);
+    };
+    await this.fetchFirstHit(
+      `/api/ai-script/${encodeURIComponent(bvid)}?parts=1`,
+      ({ data, parts, aiScriptLabel, aiScriptLabelParts }) => {
+        const label = aiScriptLabelParts?.[cid]?.isAiScript;
+        if (typeof label === 'boolean') {
+          matched = { source: 'user', isAiScript: label };
+          return true;
+        }
+        const score = parts?.[cid];
+        if (!matched && isCurrentScore(score)) matched = { source: 'ai', record: score, matchedPart: true };
+        if (page === 1 && legacy?.source !== 'user') {
+          if (typeof aiScriptLabel === 'boolean') legacy = { source: 'user', isAiScript: aiScriptLabel };
+          else if (!legacy && !score && isCurrentScore(data)) legacy = { source: 'ai', record: data, matchedPart: false };
+        }
+        return false;
+      },
+      { selfHostedOnly: hasLocalScore }
     );
-
-    if (!result?.success) {
-      console.log(`【VideoAdGuard】[CloudCache] AI 感评分云端查询未命中: ${bvid}`);
-      return null;
-    }
-
-    const record = result.data as RemoteAiScriptRecord;
-    console.log(`【VideoAdGuard】[CloudCache] AI 感评分云端缓存命中: ${bvid}, 分数: ${record.aiScore}`);
-    return record;
+    if (matched?.source !== 'user' && legacy?.source === 'user') return legacy;
+    return matched ?? legacy ?? null;
   }
 
-  /**
-   * 保存 AI 感评分到云端（双写：自有服务器 + Cloudflare，单视频单结果覆盖）
-   */
+  /** 同一分 P 的人工标注以最后一次保存为准。 */
+  static async saveRemoteAIScriptLabel({ bvid, cid, page }: VideoPart, isAiScript: boolean): Promise<boolean> {
+    return this.saveToAll('/api/ai-script-label/part', { bvid, cid, page, isAiScript }, `文案标注 ${bvid} P${page}`);
+  }
+
   static async saveRemoteAIScript(
-    bvid: string,
+    { bvid, cid, page }: VideoPart,
     record: Omit<RemoteAiScriptRecord, 'bvid' | 'version'>
   ): Promise<boolean> {
     return this.saveToAll(
-      '/api/ai-script',
-      { ...record, bvid, clientVersion: CLIENT_VERSION },
-      `AI 感评分 ${bvid}`
+      '/api/ai-script/part',
+      { ...record, bvid, cid, page, clientVersion: CLIENT_VERSION },
+      `AI 感评分 ${bvid} P${page}`
     );
   }
 }

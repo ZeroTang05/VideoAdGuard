@@ -15,6 +15,7 @@
 import express from 'express';
 import { AI_SCRIPT_KV_PREFIX, kvGet, kvPut, initDb } from './db';
 import { maybeCleanupRateLimit, checkRateLimit, RATE_LIMITS } from './rateLimit';
+import { AI_SCRIPT_LABEL_PREFIX, isValidCid, mergePartCache, PartCache, readLabelCache, selectVideoRecord } from './part-cache';
 import {
   AdRecord,
   AiScriptRecord,
@@ -29,13 +30,6 @@ import {
 const app = express();
 const PORT = Number(process.env.PORT) || 8787;
 const BIND_ADDRESS = process.env.CACHE_BIND_ADDRESS || undefined;
-const AI_SCRIPT_LABEL_PREFIX = 'ai-label:';
-
-/** 人工标注可为 true 或 false，缺少记录时才返回 undefined。 */
-function readAiScriptLabel(bvid: string): boolean | undefined {
-  const value = kvGet(AI_SCRIPT_LABEL_PREFIX + bvid);
-  return value === null ? undefined : value === 'true';
-}
 
 // JSON 解析与体积限制（与 Worker 的 content-length 检查一致）
 app.use(express.json({ limit: MAX_BODY_SIZE }));
@@ -79,43 +73,37 @@ app.get('/api/cache/:bvid', (req, res) => {
     return res.json({ success: true, data: null, exists: false });
   }
   try {
-    const record = JSON.parse(value) as AdRecord;
-    if (record.accuracy === 'accurate') {
-      return res.json({ success: true, data: record, exists: true });
-    }
-    return res.json({ success: true, data: null, exists: false });
+    const cache = JSON.parse(value) as PartCache<AdRecord>;
+    const record = selectVideoRecord(cache);
+    const data = record?.accuracy === 'accurate' ? record : null;
+    return res.json({ success: true, data, exists: data !== null, parts: req.query.parts === '1' ? cache.parts : undefined });
   } catch {
     return errorResponse(res, '缓存数据格式错误', 500);
   }
 });
 
 // POST /api/cache：与 Worker 一致，已有记录合并覆盖
-app.post('/api/cache', (req, res) => {
+app.post(['/api/cache', '/api/cache/part'], (req, res) => {
   maybeCleanupRateLimit();
   if (!checkRateLimit(`save:${req.ip}`, RATE_LIMITS.saveCache)) {
     return errorResponse(res, '请求过于频繁', 429);
   }
 
-  const validated = validateSaveBody(req.body as Record<string, unknown>);
-  if (!validated) {
+  const cid: unknown = req.path.endsWith('/part') ? req.body?.cid : undefined;
+  const validated = validateSaveBody(req.body ?? {});
+  if (!validated || (req.path.endsWith('/part') && !isValidCid(cid))) {
     return errorResponse(res, '数据格式非法或字段超限', 400);
   }
 
   const existingValue = kvGet(validated.bvid);
-  let record: AdRecord;
-  if (existingValue) {
-    try {
-      const existingRecord = JSON.parse(existingValue) as AdRecord;
-      record = { ...existingRecord, ...validated };
-    } catch {
-      record = { ...validated, version: DATA_VERSION };
-    }
-  } else {
-    record = { ...validated, version: DATA_VERSION };
-  }
-
-  kvPut(validated.bvid, JSON.stringify(record));
-  res.json({ success: true, data: { bvid: validated.bvid, accuracy: record.accuracy } });
+  const cache = mergePartCache<AdRecord>(
+    existingValue === null ? {} : JSON.parse(existingValue),
+    { ...validated, version: DATA_VERSION },
+    isValidCid(cid) ? cid : undefined,
+    req.body.page === 1,
+  );
+  kvPut(validated.bvid, JSON.stringify(cache));
+  res.json({ success: true, data: { bvid: validated.bvid, cid, accuracy: validated.accuracy } });
 });
 
 // GET /api/ai-script/:bvid
@@ -129,49 +117,64 @@ app.get('/api/ai-script/:bvid', (req, res) => {
     return errorResponse(res, '请求过于频繁', 429);
   }
 
-  const value = kvGet(AI_SCRIPT_KV_PREFIX + bvid);
-  const aiScriptLabel = readAiScriptLabel(bvid);
-  if (!value) {
-    return res.json({ success: true, data: null, exists: false, aiScriptLabel });
-  }
   try {
-    return res.json({ success: true, data: JSON.parse(value) as AiScriptRecord, exists: true, aiScriptLabel });
+    const value = kvGet(AI_SCRIPT_KV_PREFIX + bvid);
+    const cache: PartCache<AiScriptRecord> = value === null ? {} : JSON.parse(value);
+    const labels = readLabelCache(kvGet(AI_SCRIPT_LABEL_PREFIX + bvid));
+    const data = selectVideoRecord(cache);
+    const includeParts = req.query.parts === '1';
+    return res.json({
+      success: true, data, exists: data !== null, aiScriptLabel: labels.isAiScript,
+      parts: includeParts ? cache.parts : undefined,
+      aiScriptLabelParts: includeParts ? labels.parts : undefined,
+    });
   } catch {
     return errorResponse(res, '缓存数据格式错误', 500);
   }
 });
 
-// POST /api/ai-script：单视频单结果，直接覆盖
-app.post('/api/ai-script', (req, res) => {
+// POST /api/ai-script：旧客户端写整条，新客户端更新当前分 P。
+app.post(['/api/ai-script', '/api/ai-script/part'], (req, res) => {
   maybeCleanupRateLimit();
   if (!checkRateLimit(`ai:save:${req.ip}`, RATE_LIMITS.saveAiScript)) {
     return errorResponse(res, '请求过于频繁', 429);
   }
 
-  const validated = validateAiScriptBody(req.body as Record<string, unknown>);
-  if (!validated) {
+  const cid: unknown = req.path.endsWith('/part') ? req.body?.cid : undefined;
+  const validated = validateAiScriptBody(req.body ?? {});
+  if (!validated || (req.path.endsWith('/part') && !isValidCid(cid))) {
     return errorResponse(res, '数据格式非法或字段超限', 400);
   }
 
-  const record: AiScriptRecord = { ...validated, version: DATA_VERSION };
-  kvPut(AI_SCRIPT_KV_PREFIX + validated.bvid, JSON.stringify(record));
-  res.json({ success: true, data: { bvid: validated.bvid } });
+  const key = AI_SCRIPT_KV_PREFIX + validated.bvid;
+  const value = kvGet(key);
+  const cache = mergePartCache<AiScriptRecord>(
+    value === null ? {} : JSON.parse(value),
+    { ...validated, version: DATA_VERSION },
+    isValidCid(cid) ? cid : undefined,
+    req.body.page === 1,
+  );
+  kvPut(key, JSON.stringify(cache));
+  res.json({ success: true, data: { bvid: validated.bvid, cid } });
 });
 
-// 每个视频只保留最后一次成功写入的人工标注。
-app.post('/api/ai-script-label', (req, res) => {
+// 每个分 P 只保留最后一次成功写入的人工标注。
+app.post(['/api/ai-script-label', '/api/ai-script-label/part'], (req, res) => {
   maybeCleanupRateLimit();
   if (!checkRateLimit(`ai:label:${req.ip}`, RATE_LIMITS.saveAiScript)) {
     return errorResponse(res, '请求过于频繁', 429);
   }
 
-  const { bvid, isAiScript } = req.body ?? {};
-  if (!isValidBvid(bvid) || typeof isAiScript !== 'boolean') {
+  const { bvid, isAiScript, page } = req.body ?? {};
+  const cid: unknown = req.path.endsWith('/part') ? req.body?.cid : undefined;
+  if (!isValidBvid(bvid) || typeof isAiScript !== 'boolean' || (req.path.endsWith('/part') && !isValidCid(cid))) {
     return errorResponse(res, '标注数据格式错误', 400);
   }
 
-  kvPut(AI_SCRIPT_LABEL_PREFIX + bvid, JSON.stringify(isAiScript));
-  res.json({ success: true, data: { bvid, isAiScript } });
+  const key = AI_SCRIPT_LABEL_PREFIX + bvid;
+  const cache = mergePartCache(readLabelCache(kvGet(key)), { isAiScript }, isValidCid(cid) ? cid : undefined, page === 1);
+  kvPut(key, JSON.stringify(cache.parts ? cache : isAiScript));
+  res.json({ success: true, data: { bvid, cid, isAiScript } });
 });
 
 // POST /api/batch：批量查询广告与 AI 感评分（首页卡片标注用）
@@ -197,8 +200,8 @@ app.post('/api/batch', (req, res) => {
     const adValue = kvGet(bvid);
     if (adValue) {
       try {
-        const record = JSON.parse(adValue) as AdRecord;
-        if (record.accuracy === 'accurate') ad = record;
+        const record = selectVideoRecord(JSON.parse(adValue) as PartCache<AdRecord>, true);
+        if (record?.accuracy === 'accurate') ad = record;
       } catch {
         // 损坏记录按无数据处理
       }
@@ -208,13 +211,15 @@ app.post('/api/batch', (req, res) => {
     const aiValue = kvGet(AI_SCRIPT_KV_PREFIX + bvid);
     if (aiValue) {
       try {
-        aiScript = JSON.parse(aiValue) as AiScriptRecord;
+        aiScript = selectVideoRecord(JSON.parse(aiValue) as PartCache<AiScriptRecord>, true);
       } catch {
         // 损坏记录按无数据处理
       }
     }
 
-    data[bvid] = { ad, aiScript, aiScriptLabel: readAiScriptLabel(bvid) };
+    const labels = readLabelCache(kvGet(AI_SCRIPT_LABEL_PREFIX + bvid));
+    const firstLabel = labels.firstCid ? labels.parts?.[labels.firstCid]?.isAiScript : undefined;
+    data[bvid] = { ad, aiScript, aiScriptLabel: firstLabel ?? labels.isAiScript };
   }
 
   res.json({ success: true, data });

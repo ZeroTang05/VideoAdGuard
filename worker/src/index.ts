@@ -8,7 +8,7 @@
  *   POST /api/ai-script       - 保存/更新 AI 文案检测结果
  */
 
-// ============= 类型定义 =============
+import { AI_SCRIPT_LABEL_PREFIX, isValidCid, mergePartCache, PartCache, readLabelCache, selectVideoRecord } from '../../server/src/part-cache';
 
 export interface Env {
   VIDEO_AD_GUARD_KV: KVNamespace;
@@ -283,18 +283,20 @@ export default {
       }
 
       try {
-        const record = JSON.parse(value) as AdRecord;
-        if (record.accuracy === 'accurate') {
-          return jsonResponse({ success: true, data: record, exists: true });
-        }
-        return jsonResponse({ success: true, data: null, exists: false });
+        const cache = JSON.parse(value) as PartCache<AdRecord>;
+        const record = selectVideoRecord(cache);
+        const data = record?.accuracy === 'accurate' ? record : null;
+        return jsonResponse({
+          success: true, data, exists: data !== null,
+          parts: url.searchParams.get('parts') === '1' ? cache.parts : undefined,
+        });
       } catch {
         return errorResponse('缓存数据格式错误', 500);
       }
     }
 
     // POST /api/cache
-    if (request.method === 'POST' && url.pathname === '/api/cache') {
+    if (request.method === 'POST' && ['/api/cache', '/api/cache/part'].includes(url.pathname)) {
       const rateKey = `save:${clientIP}`;
       if (!checkRateLimit(rateKey, RATE_LIMITS.saveCache)) {
         return errorResponse('请求过于频繁', 429);
@@ -312,72 +314,26 @@ export default {
         return errorResponse('请求体必须是 JSON', 400);
       }
 
-      const validated = validateSaveBody(body);
-      if (!validated) {
+      const cid = url.pathname.endsWith('/part') ? body?.cid : undefined;
+      const validated = validateSaveBody(body ?? {});
+      if (!validated || (url.pathname.endsWith('/part') && !isValidCid(cid))) {
         return errorResponse('数据格式非法或字段超限', 400);
       }
 
-      // 统一更新逻辑：用新数据覆盖已有记录的所有字段
       const existingValue = await env.VIDEO_AD_GUARD_KV.get(validated.bvid);
-      let record: AdRecord;
-
-      if (existingValue) {
-        try {
-          const existingRecord = JSON.parse(existingValue) as AdRecord;
-          record = {
-            ...existingRecord,
-            exist: validated.exist,
-            goodName: validated.goodName,
-            adTimeRanges: validated.adTimeRanges,
-            model: validated.model,
-            provider: validated.provider,
-            detectedAt: validated.detectedAt,
-            isDetectionConfident: validated.isDetectionConfident,
-            accuracy: validated.accuracy,
-            source: validated.source,
-          };
-        } catch {
-          // 解析失败，用新数据覆盖
-          record = {
-            bvid: validated.bvid,
-            exist: validated.exist,
-            goodName: validated.goodName,
-            adTimeRanges: validated.adTimeRanges,
-            model: validated.model,
-            provider: validated.provider,
-            detectedAt: validated.detectedAt,
-            isDetectionConfident: validated.isDetectionConfident,
-            accuracy: validated.accuracy,
-            source: validated.source,
-            version: DATA_VERSION,
-            clientVersion: validated.clientVersion,
-          };
-        }
-      } else {
-        // 无旧记录，创建新记录
-        record = {
-          bvid: validated.bvid,
-          exist: validated.exist,
-          goodName: validated.goodName,
-          adTimeRanges: validated.adTimeRanges,
-          model: validated.model,
-          provider: validated.provider,
-          detectedAt: validated.detectedAt,
-          isDetectionConfident: validated.isDetectionConfident,
-          accuracy: validated.accuracy,
-          source: validated.source,
-          version: DATA_VERSION,
-          clientVersion: validated.clientVersion,
-        };
-      }
-
+      const cache = mergePartCache<AdRecord>(
+        existingValue === null ? {} : JSON.parse(existingValue),
+        { ...validated, version: DATA_VERSION },
+        isValidCid(cid) ? cid : undefined,
+        body.page === 1,
+      );
       await env.VIDEO_AD_GUARD_KV.put(
         validated.bvid,
-        JSON.stringify(record),
+        JSON.stringify(cache),
         getKvOptions(CACHE_TTL_SECONDS)
       );
 
-      return jsonResponse({ success: true, data: { bvid: validated.bvid, accuracy: record.accuracy } });
+      return jsonResponse({ success: true, data: { bvid: validated.bvid, cid, accuracy: validated.accuracy } });
     }
 
     // GET /api/ai-script/:bvid
@@ -394,23 +350,32 @@ export default {
         return errorResponse('请求过于频繁', 429);
       }
 
-      const value = await env.VIDEO_AD_GUARD_KV.get(AI_SCRIPT_KV_PREFIX + bvid);
-      if (!value) {
-        return jsonResponse({ success: true, data: null, exists: false });
-      }
-
       try {
-        const record = JSON.parse(value) as AiScriptRecord;
-        return jsonResponse({ success: true, data: record, exists: true });
+        const [value, labelValue] = await Promise.all([
+          env.VIDEO_AD_GUARD_KV.get(AI_SCRIPT_KV_PREFIX + bvid),
+          env.VIDEO_AD_GUARD_KV.get(AI_SCRIPT_LABEL_PREFIX + bvid),
+        ]);
+        const cache: PartCache<AiScriptRecord> = value === null ? {} : JSON.parse(value);
+        const labels = readLabelCache(labelValue);
+        const data = selectVideoRecord(cache);
+        const includeParts = url.searchParams.get('parts') === '1';
+        return jsonResponse({
+          success: true, data, exists: data !== null, aiScriptLabel: labels.isAiScript,
+          parts: includeParts ? cache.parts : undefined,
+          aiScriptLabelParts: includeParts ? labels.parts : undefined,
+        });
       } catch {
         return errorResponse('缓存数据格式错误', 500);
       }
     }
 
     // POST /api/ai-script
-    if (request.method === 'POST' && url.pathname === '/api/ai-script') {
+    if (request.method === 'POST' && [
+      '/api/ai-script', '/api/ai-script/part', '/api/ai-script-label', '/api/ai-script-label/part',
+    ].includes(url.pathname)) {
+      const isLabel = url.pathname.startsWith('/api/ai-script-label');
       const rateKey = `ai:save:${clientIP}`;
-      if (!checkRateLimit(rateKey, RATE_LIMITS.saveAiScript)) {
+      if (!checkRateLimit(isLabel ? `ai:label:${clientIP}` : rateKey, RATE_LIMITS.saveAiScript)) {
         return errorResponse('请求过于频繁', 429);
       }
 
@@ -426,24 +391,41 @@ export default {
         return errorResponse('请求体必须是 JSON', 400);
       }
 
-      const validated = validateAiScriptBody(body);
-      if (!validated) {
+      const cid = url.pathname.endsWith('/part') ? body?.cid : undefined;
+      if (url.pathname.endsWith('/part') && !isValidCid(cid)) {
         return errorResponse('数据格式非法或字段超限', 400);
       }
+      const partCid = isValidCid(cid) ? cid : undefined;
+      if (isLabel) {
+        const { bvid, isAiScript, page } = body ?? {};
+        if (!isValidBvid(bvid) || typeof isAiScript !== 'boolean') {
+          return errorResponse('标注数据格式错误', 400);
+        }
+        const key = AI_SCRIPT_LABEL_PREFIX + bvid;
+        const labels = readLabelCache(await env.VIDEO_AD_GUARD_KV.get(key));
+        const cache = mergePartCache(labels, { isAiScript }, partCid, page === 1);
+        await env.VIDEO_AD_GUARD_KV.put(key, JSON.stringify(cache.parts ? cache : isAiScript));
+        return jsonResponse({ success: true, data: { bvid, cid, isAiScript } });
+      }
 
-      // 单视频单结果，直接覆盖存储
-      const record: AiScriptRecord = {
-        ...validated,
-        version: DATA_VERSION,
-      };
+      const validated = validateAiScriptBody(body ?? {});
+      if (!validated) return errorResponse('数据格式非法或字段超限', 400);
+      const key = AI_SCRIPT_KV_PREFIX + validated.bvid;
+      const value = await env.VIDEO_AD_GUARD_KV.get(key);
+      const cache = mergePartCache<AiScriptRecord>(
+        value === null ? {} : JSON.parse(value),
+        { ...validated, version: DATA_VERSION },
+        partCid,
+        body.page === 1,
+      );
 
       await env.VIDEO_AD_GUARD_KV.put(
-        AI_SCRIPT_KV_PREFIX + validated.bvid,
-        JSON.stringify(record),
+        key,
+        JSON.stringify(cache),
         getKvOptions(CACHE_TTL_SECONDS)
       );
 
-      return jsonResponse({ success: true, data: { bvid: validated.bvid } });
+      return jsonResponse({ success: true, data: { bvid: validated.bvid, cid } });
     }
 
     // POST /api/batch - 批量查询广告与 AI 文案检测结果（首页卡片标注用）
@@ -471,31 +453,32 @@ export default {
         return errorResponse('包含非法的 BV 号', 400);
       }
 
-      // 每个 bvid 读两条记录（广告 + AI 文案），并发读取
-      const data: Record<string, { ad: AdRecord | null; aiScript: AiScriptRecord | null }> = {};
+      const data: Record<string, { ad: AdRecord | null; aiScript: AiScriptRecord | null; aiScriptLabel?: boolean }> = {};
       await Promise.all(bvids.map(async (bvid) => {
-        const [adValue, aiValue] = await Promise.all([
+        const [adValue, aiValue, labelValue] = await Promise.all([
           env.VIDEO_AD_GUARD_KV.get(bvid),
           env.VIDEO_AD_GUARD_KV.get(AI_SCRIPT_KV_PREFIX + bvid),
+          env.VIDEO_AD_GUARD_KV.get(AI_SCRIPT_LABEL_PREFIX + bvid),
         ]);
 
         let ad: AdRecord | null = null;
         if (adValue) {
           try {
-            const record = JSON.parse(adValue) as AdRecord;
-            // 与单条查询一致：inaccurate 记录不返回
-            if (record.accuracy === 'accurate') ad = record;
+            const record = selectVideoRecord(JSON.parse(adValue) as PartCache<AdRecord>, true);
+            if (record?.accuracy === 'accurate') ad = record;
           } catch { /* 损坏记录按无数据处理 */ }
         }
 
         let aiScript: AiScriptRecord | null = null;
         if (aiValue) {
           try {
-            aiScript = JSON.parse(aiValue) as AiScriptRecord;
+            aiScript = selectVideoRecord(JSON.parse(aiValue) as PartCache<AiScriptRecord>, true);
           } catch { /* 损坏记录按无数据处理 */ }
         }
 
-        data[bvid] = { ad, aiScript };
+        const labels = readLabelCache(labelValue);
+        const firstLabel = labels.firstCid ? labels.parts?.[labels.firstCid]?.isAiScript : undefined;
+        data[bvid] = { ad, aiScript, aiScriptLabel: firstLabel ?? labels.isAiScript };
       }));
 
       return jsonResponse({ success: true, data });

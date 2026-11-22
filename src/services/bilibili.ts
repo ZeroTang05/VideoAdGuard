@@ -1,5 +1,20 @@
 import { WbiUtils } from '../utils/wbi';
 
+export interface VideoPart {
+  bvid: string;
+  cid: string;
+  page: number;
+  duration: number;
+  title: string;
+}
+
+interface VideoInfo {
+  title: string;
+  desc?: string;
+  owner: { mid: number };
+  pages: { page: number; cid: number; duration: number; part: string }[];
+}
+
 export class BilibiliService {
   private static async fetchWithCookie(url: string, params: Record<string, any> = {}) {
     const queryString = new URLSearchParams(params).toString();
@@ -23,7 +38,7 @@ export class BilibiliService {
     return data.data;
   }
 
-  public static async getVideoInfo(bvid: string) {
+  public static async getVideoInfo(bvid: string): Promise<VideoInfo> {
     console.log('【VideoAdGuard】[BilibiliService] Getting video info');
     const data = await this.fetchWithCookie(
       'https://api.bilibili.com/x/web-interface/view',
@@ -31,6 +46,18 @@ export class BilibiliService {
     );
     console.log('【VideoAdGuard】[BilibiliService] Video info result:', data);
     return data;
+  }
+
+  /** 详情最外层的 cid 属于 P1，当前 P 必须从 pages 匹配。 */
+  public static resolveVideoPart(bvid: string, page: number, video: VideoInfo): VideoPart {
+    const part = video.pages.find(item => item.page === page);
+    if (!part || !Number.isSafeInteger(part.cid) || part.cid <= 0) {
+      throw new Error(`未找到 ${bvid} 的 P${page}`);
+    }
+    const title = video.pages.length > 1 && part.part && part.part !== video.title
+      ? `${video.title} - ${part.part}`
+      : video.title;
+    return { bvid, page, cid: String(part.cid), duration: part.duration, title };
   }
 
   public static async getComments(bvid: string) {
@@ -60,7 +87,7 @@ export class BilibiliService {
     }
   }
 
-  public static async getPlayerInfo(bvid: string, cid: number) {
+  public static async getPlayerInfo(bvid: string, cid: string) {
     console.log('【VideoAdGuard】[BilibiliService] Getting player info');
     const params = { bvid: bvid, cid: cid};
     const signedParams = await WbiUtils.encWbi(params);
@@ -106,7 +133,7 @@ export class BilibiliService {
    * @param cid 视频的CID
    * @returns 视频流信息，包含播放地址等
    */
-  public static async getPlayUrl(bvid: string, cid: number) {
+  public static async getPlayUrl(bvid: string, cid: string) {
     console.log('【VideoAdGuard】[BilibiliService] Getting video url');
     const params = { bvid: bvid, cid: cid, fnval: 16 };
     const signedParams = await WbiUtils.encWbi(params);

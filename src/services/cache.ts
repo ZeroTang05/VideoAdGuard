@@ -26,6 +26,9 @@ export interface CacheItem {
   createdAt: number;
 }
 
+/** 旧记录与各分 P 的记录共享一个 BV 键。 */
+type CacheValue = Partial<CacheItem> & { parts?: Record<string, CacheItem> };
+
 export class CacheService {
   private static readonly CACHE_KEY = 'videoAdGuard_detectionCache';
   private static readonly LAST_CLEANUP_KEY = 'videoAdGuard_lastCleanupTime';
@@ -33,20 +36,16 @@ export class CacheService {
   private static readonly CACHE_EXPIRY_MS = CacheService.CACHE_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
   private static readonly CLEANUP_INTERVAL_MS = CacheService.CACHE_EXPIRY_MS; // 清理间隔：1天
 
-  /**
-   * 生成缓存键
-   * @param bvid 视频BV号
-   * @returns 缓存键
-   */
-  private static generateCacheKey(bvid: string): string {
-    return `${bvid}`;
+  private static legacyRecord(value: CacheValue): CacheItem | undefined {
+    const { parts, ...legacy } = value;
+    return typeof legacy.createdAt === 'number' ? legacy as CacheItem : undefined;
   }
 
   /**
    * 获取所有缓存数据
    * @returns 缓存数据对象
    */
-  private static async getAllCache(): Promise<Record<string, CacheItem>> {
+  private static async getAllCache(): Promise<Record<string, CacheValue>> {
     try {
       const result = await chrome.storage.local.get(CacheService.CACHE_KEY);
       return result[CacheService.CACHE_KEY] || {};
@@ -60,7 +59,7 @@ export class CacheService {
    * 保存所有缓存数据
    * @param cache 缓存数据对象
    */
-  private static async saveAllCache(cache: Record<string, CacheItem>): Promise<void> {
+  private static async saveAllCache(cache: Record<string, CacheValue>): Promise<void> {
     try {
       await chrome.storage.local.set({
         [CacheService.CACHE_KEY]: cache
@@ -76,7 +75,7 @@ export class CacheService {
    * @returns 是否过期
    */
   private static isExpired(item: CacheItem): boolean {
-    // 注意：inaccurate 不再视为过期，而是 getDetectionResult 读取时跳过
+    // 不准确标记保留到过期，期间允许重新检测当前 P。
     const now = Date.now();
     return (now - item.createdAt) > CacheService.CACHE_EXPIRY_MS;
   }
@@ -147,13 +146,16 @@ export class CacheService {
       let cleanedCount = 0;
 
       // 过滤掉过期的缓存项
-      const cleanedCache: Record<string, CacheItem> = {};
-      for (const [key, item] of Object.entries(cache)) {
-        if (!CacheService.isExpired(item)) {
-          cleanedCache[key] = item;
-        } else {
-          cleanedCount++;
+      const cleanedCache: Record<string, CacheValue> = {};
+      for (const [key, value] of Object.entries(cache)) {
+        const legacy = this.legacyRecord(value);
+        const parts = Object.entries(value.parts ?? {});
+        const freshParts = parts.filter(([, item]) => !this.isExpired(item));
+        const freshLegacy = legacy && !this.isExpired(legacy) ? legacy : undefined;
+        if (freshLegacy || freshParts.length) {
+          cleanedCache[key] = { ...freshLegacy, parts: Object.fromEntries(freshParts) };
         }
+        cleanedCount += parts.length - freshParts.length + Number(Boolean(legacy && !freshLegacy));
       }
 
       // 保存更新后的缓存和清理时间
@@ -170,48 +172,15 @@ export class CacheService {
     }
   }
 
-  /**
-   * 从缓存中获取检测结果
-   * @param bvid 视频BV号
-   * @returns 缓存的检测结果，如果不存在或已过期则返回null
-   */
-  public static async getDetectionResult(bvid: string): Promise<CacheItem | null> {
-    try {
-      const cache = await CacheService.getAllCache();
-      const cacheKey = CacheService.generateCacheKey(bvid);
-      const item = cache[cacheKey];
-
-      if (!item) {
-        console.log(`【VideoAdGuard】[Cache] 未找到 ${bvid} 的缓存`);
-        return null;
-      }
-
-      if (CacheService.isExpired(item)) {
-        console.log(`【VideoAdGuard】[Cache] ${bvid} 的缓存已过期`);
-        // 删除过期的缓存项
-        delete cache[cacheKey];
-        await CacheService.saveAllCache(cache);
-        return null;
-      }
-
-      // 跳过标记为不准确的缓存（视为无缓存，下次会重新检测）
-      if (item.accuracy === 'inaccurate') {
-        console.log(`【VideoAdGuard】[Cache] ${bvid} 的缓存标记为不准确，视为无缓存`);
-        return null;
-      }
-
-      console.log(`【VideoAdGuard】[Cache] 找到 ${bvid} 的有效缓存`);
-
-      // 向后兼容：如果缓存项没有isDetectionConfident字段，设置默认值
-      if (item.isDetectionConfident === undefined) {
-        item.isDetectionConfident = false;
-      }
-
-      return item;
-    } catch (error) {
-      console.warn('【VideoAdGuard】[Cache] 获取缓存失败:', error);
-      return null;
-    }
+  /** 同时读取当前 P 与旧 BV 结果，保留当前 P 的纠错状态。 */
+  public static async getDetectionResults(bvid: string, cid: string) {
+    const value = (await this.getAllCache())[bvid] ?? {};
+    const part = value.parts?.[cid];
+    const legacy = this.legacyRecord(value);
+    return {
+      part: part && !this.isExpired(part) ? part : undefined,
+      legacy: legacy && legacy.accuracy !== 'inaccurate' && !this.isExpired(legacy) ? legacy : undefined,
+    };
   }
 
   /**
@@ -228,6 +197,7 @@ export class CacheService {
    */
   public static async saveDetectionResult(
     bvid: string,
+    cid: string | undefined,
     exist: boolean,
     good_name: string[],
     adTimeRanges: number[][],
@@ -239,8 +209,6 @@ export class CacheService {
   ): Promise<void> {
     try {
       const cache = await CacheService.getAllCache();
-      const cacheKey = CacheService.generateCacheKey(bvid);
-
       const cacheItem: CacheItem = {
         exist,
         goodName: good_name,
@@ -255,7 +223,10 @@ export class CacheService {
         recordSource: 'ai',
       };
 
-      cache[cacheKey] = cacheItem;
+      const value = cache[bvid] ?? {};
+      cache[bvid] = cid
+        ? { ...value, parts: { ...value.parts, [cid]: cacheItem } }
+        : { ...value, ...cacheItem };
       await CacheService.saveAllCache(cache);
 
       console.log(`【VideoAdGuard】[Cache] 已保存 ${bvid} 的检测结果到缓存（来源: ${source}）`);
@@ -271,27 +242,28 @@ export class CacheService {
    * @param recordSource 可选：标记来源为 'user'（用户手动修正）
    * @param isConfident 可选：标记为可信（手动修正后应为 true）
    */
-  public static async updateAdTimeRanges(bvid: string, adTimeRanges: number[][], recordSource?: 'user', isConfident?: boolean): Promise<void> {
+  public static async updateAdTimeRanges(bvid: string, cid: string, adTimeRanges: number[][], recordSource?: 'user', isConfident?: boolean): Promise<void> {
     try {
       const cache = await CacheService.getAllCache();
-      const cacheKey = CacheService.generateCacheKey(bvid);
-      const item = cache[cacheKey];
+      const value = cache[bvid] ?? {};
+      const item = value.parts?.[cid] ?? this.legacyRecord(value);
 
       if (!item) {
         console.log(`【VideoAdGuard】[Cache] 未找到 ${bvid} 的缓存，跳过广告区间更新`);
         return;
       }
 
-      item.adTimeRanges = adTimeRanges;
-      item.exist = adTimeRanges.length > 0 ? true : false;
-      item.createdAt = Date.now();
+      const updated = { ...item, adTimeRanges };
+      updated.exist = adTimeRanges.length > 0 ? true : false;
+      updated.createdAt = Date.now();
       // 用户手动修正广告区间时，标记来源为 user，同时将 accuracy 改为 accurate
       if (recordSource === 'user') {
-        item.recordSource = 'user';
-        item.accuracy = 'accurate';
-        item.isDetectionConfident = isConfident ?? true;
+        updated.recordSource = 'user';
+        updated.accuracy = 'accurate';
+        updated.isDetectionConfident = isConfident ?? true;
       }
 
+      cache[bvid] = { ...value, parts: { ...value.parts, [cid]: updated } };
       await CacheService.saveAllCache(cache);
       console.log(`【VideoAdGuard】[Cache] 已同步 ${bvid} 的手动调整广告区间到缓存`);
     } catch (error) {
@@ -306,10 +278,10 @@ export class CacheService {
   public static async deleteDetectionResult(bvid: string): Promise<void> {
     try {
       const cache = await CacheService.getAllCache();
-      const cacheKey = CacheService.generateCacheKey(bvid);
+
       
-      if (cache[cacheKey]) {
-        delete cache[cacheKey];
+      if (cache[bvid]) {
+        delete cache[bvid];
         await CacheService.saveAllCache(cache);
         console.log(`【VideoAdGuard】[Cache] 已删除 ${bvid} 的缓存`);
       }
@@ -344,13 +316,17 @@ export class CacheService {
   }> {
     try {
       const cache = await CacheService.getAllCache();
-      const entries = Object.entries(cache);
+      const entries = Object.values(cache).flatMap(value => {
+        const legacy = this.legacyRecord(value);
+        const parts = Object.values(value.parts ?? {});
+        return legacy ? [legacy, ...parts] : parts;
+      });
       const lastCleanupTime = await CacheService.getLastCleanupTime();
 
       let expiredCount = 0;
       let validCount = 0;
 
-      for (const [, item] of entries) {
+      for (const item of entries) {
         if (CacheService.isExpired(item)) {
           expiredCount++;
         } else {
@@ -383,15 +359,17 @@ export class CacheService {
    * 标记缓存为不准确，下次进入时会重新检测
    * @param bvid 视频BV号
    */
-  public static async markAsInaccurate(bvid: string): Promise<void> {
+  public static async markAsInaccurate(bvid: string, cid: string): Promise<void> {
     try {
       const cache = await CacheService.getAllCache();
-      const cacheKey = CacheService.generateCacheKey(bvid);
-      const item = cache[cacheKey];
+      const value = cache[bvid] ?? {};
+      const item = value.parts?.[cid] ?? this.legacyRecord(value);
 
       if (item) {
-        item.accuracy = 'inaccurate';
-        item.createdAt = Date.now();
+        cache[bvid] = {
+          ...value,
+          parts: { ...value.parts, [cid]: { ...item, accuracy: 'inaccurate', createdAt: Date.now() } },
+        };
         await CacheService.saveAllCache(cache);
         console.log(`【VideoAdGuard】[Cache] 已标记 ${bvid} 的缓存为不准确`);
       }
