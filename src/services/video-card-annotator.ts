@@ -1,15 +1,6 @@
 /**
- * 视频卡片标注器：
- * 在视频入口页面（首页推荐/热门/搜索/动态，及 BewlyBewly、bilibili-gate 等美化插件）
- * 的视频卡片封面上叠加云端已有的广告与 AI 感评分小标签。
- * 首页只读云端共享数据、不做新检测；点进视频页才检测并回填云端。
- *
- * DOM 适配层整体照搬自 BilibiliSponsorBlock（src/thumbnail-utils/，GPL-2.0，与本插件许可证一致）：
- * - 场景注册表（thumbnail-selectors.ts）→ video-card-scenarios.ts
- * - 容器观察与可见性过滤（thumbnailObserver.ts）→ VagCardObserver
- * - 标签插入流程（thumbnails.ts / thumbnailManagement.ts）→ labelCard 及场景管理
- * 业务层（批查询缓存）为本项目实现。与 BSB 的偏离点均有注释说明。
- * 标签全部使用 inline style，Shadow DOM 内可直接生效，无需注入样式表。
+ * 在 B 站列表页标注云端已有的广告和 AI 感结果。
+ * 卡片选择器及封面定位参考 BilibiliSponsorBlock 的 thumbnail-utils（GPL-2.0）。
  */
 
 import { CloudCacheService, RemoteBatchItem } from './cloud-cache';
@@ -20,311 +11,362 @@ import {
   resolveScenarioRoot,
 } from './video-card-scenarios';
 import { getVideoCardScenarios } from '../utils/video-page';
+import { aiScriptLabelText } from '../utils/script-result';
 
-// 卡片根上记录已标注 bvid 的 data 属性（照搬 BSB 的 data-bsb-bvid；Vue 复用卡片时据此识别 bvid 变化）
-const DATA_BVID_ATTR = 'data-vag-bvid';
-// 标签容器类名（observer 据此过滤自身引发的 mutation）
 const BADGE_CONTAINER_CLASS = 'vag-home-badges10032';
-// 已查询但云端无数据的占位
-const NO_RESULT = null;
+const BADGE_SELECTOR = '.' + BADGE_CONTAINER_CLASS;
+const LABEL_RENDER_MARGIN = '500px 0px';
+// 已加载的首批卡片尽快查；后续新加载的零散卡片等一会儿再合批。
+const MIN_BATCH_SIZE = 12;
+const MAX_BATCH_SIZE = 30;
+const BATCH_GATHER_MS = 250;
+const PARTIAL_BATCH_GATHER_MS = 2000;
+const MIN_REQUEST_INTERVAL_MS = 1500;
+const RETRY_DELAY_MS = 6000;
+const MAX_CONSECUTIVE_FAILURES = 2;
 
-/** BSB 的 waitFor：轮询等待条件成立（用于锚点延迟渲染），超时抛错 */
-function waitFor(conditionsFunction: () => unknown, timeoutMs = 5000, intervalMs = 25): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const startTime = Date.now();
-    const check = () => {
-      const result = conditionsFunction();
-      if (result) return resolve(result);
-      if (Date.now() - startTime >= timeoutMs) return reject(new Error('waitFor timed out'));
-      setTimeout(check, intervalMs);
-    };
-    check();
-  });
-}
-
-interface ResolvedScenario {
+interface VideoCard {
+  element: HTMLElement;
   scenario: VideoCardScenario;
-  root: Document | ShadowRoot;
+  nearby: boolean;
+  bvid: string | null;
+  linkDirty: boolean;
+  anchorDirty: boolean;
+  badge: { bvid: string; anchor: Element; element: HTMLElement } | null;
 }
 
-/**
- * 卡片观察器（照搬 BilibiliSponsorBlock 的 ThumbnailObserver）：
- * - IntersectionObserver 只标注视口内的卡片（首页上百张卡片的性能关键）
- * - MutationObserver 监听容器子树，过滤自身标签引发的变更防止自触发循环
- * - 容器被替换（isConnected=false）时自动断连并通知上层重建
- */
+/** 新增或换了视频的卡片触发查询，接近视口时才需要渲染标签。 */
 class VagCardObserver {
-  private readonly cards = new Set<HTMLElement>();
-  private readonly visibleCards = new Set<HTMLElement>();
-  private readonly dirtyCards = new Set<HTMLElement>();
+  private readonly cards = new Map<Element, VideoCard>();
   private readonly visibilityObserver: IntersectionObserver;
   private readonly mutationObserver: MutationObserver;
-  private readonly selector: string;
 
   constructor(
     readonly container: Element,
     private readonly scenario: VideoCardScenario,
-    private readonly labelCard: (card: HTMLElement, scenario: VideoCardScenario) => void,
-    onContainerRemoved: () => void
+    private readonly updateCard: (card: VideoCard) => void,
+    private readonly releaseCard: (card: VideoCard) => void,
+    onContainerRemoved: () => void,
   ) {
-    this.selector = scenario.cardSelector;
     this.visibilityObserver = new IntersectionObserver((entries) => {
       for (const entry of entries) {
-        const card = entry.target as HTMLElement;
-        if (!this.cards.has(card)) continue;
-        if (entry.isIntersecting && entry.boundingClientRect.width > 0 && entry.boundingClientRect.height > 0) {
-          this.visibleCards.add(card);
-          this.labelVisibleCard(card);
-        } else {
-          this.visibleCards.delete(card);
-        }
+        const card = this.cards.get(entry.target);
+        if (!card) continue;
+        const nearby = entry.isIntersecting && entry.boundingClientRect.width > 0 && entry.boundingClientRect.height > 0;
+        if (nearby === card.nearby) continue;
+        card.nearby = nearby;
+        if (nearby) this.updateCard(card);
       }
-    });
+    }, { rootMargin: LABEL_RENDER_MARGIN });
 
     this.mutationObserver = new MutationObserver((mutations) => {
-      // 容器被 SPA 整体替换：断连并通知上层重建
       if (!container.isConnected) {
         this.disconnect();
         onContainerRemoved();
         return;
       }
-
-      const changedCards = new Set<HTMLElement>();
-      let nodesRemoved = false;
-      for (const mutation of mutations) {
-        const target = mutation.target instanceof Element ? mutation.target : mutation.target.parentElement;
-        // 自身标签的插入/更新不得触发新一轮标注（防自触发循环）
-        if (target?.closest(`.${BADGE_CONTAINER_CLASS}`)) continue;
-        if (mutation.type === 'childList') {
-          nodesRemoved ||= mutation.removedNodes.length > 0;
-          if (!mutation.removedNodes.length && Array.from(mutation.addedNodes).every(
-            (node) => node instanceof Element && node.matches(`.${BADGE_CONTAINER_CLASS}`)
-          )) continue;
-
-          Array.from(mutation.addedNodes).forEach((node) => {
-            if (node instanceof HTMLElement) this.observeCards(node);
-          });
-        }
-
-        const card = target?.closest<HTMLElement>(this.selector);
-        if (card && this.cards.has(card)) changedCards.add(card);
-      }
-
-      if (nodesRemoved) this.removeDetachedCards();
-      for (const card of changedCards) {
-        this.dirtyCards.add(card);
-        this.labelVisibleCard(card);
-      }
+      for (const mutation of mutations) this.handleMutation(mutation);
     });
+    const linkAttribute = scenario.linkAttribute ?? 'href';
     this.mutationObserver.observe(container, {
       attributes: true,
-      attributeFilter: [scenario.linkAttribute ?? 'href'],
+      attributeFilter: [linkAttribute],
       childList: true,
       subtree: true,
     });
     if (container.parentNode) this.mutationObserver.observe(container.parentNode, { childList: true });
-    this.observeCards(container);
-  }
 
-  /** 容器仍在时全量刷新：重收卡片、重标可见卡片（数据到达后由上层触发 invalidate） */
-  refresh(invalidateLabels = false): void {
-    this.removeDetachedCards();
-    this.observeCards(this.container);
-    if (invalidateLabels) {
-      for (const card of this.cards) this.dirtyCards.add(card);
-    }
-    for (const card of this.visibleCards) this.labelVisibleCard(card);
+    this.forEachCardElement(container, (element) => this.observeCard(element));
   }
 
   disconnect(): void {
     this.mutationObserver.disconnect();
     this.visibilityObserver.disconnect();
+    for (const card of this.cards.values()) this.release(card);
     this.cards.clear();
-    this.visibleCards.clear();
-    this.dirtyCards.clear();
   }
 
-  private observeCards(root: Element): void {
-    if (!this.container.contains(root)) return;
-    if (root.matches(this.selector)) this.observeCard(root as HTMLElement);
-    root.querySelectorAll<HTMLElement>(this.selector).forEach((card) => this.observeCard(card));
-  }
+  private handleMutation(mutation: MutationRecord): void {
+    const target = mutation.target;
+    if (!(target instanceof Element) || target.closest(BADGE_SELECTOR) || !this.container.contains(target)) return;
 
-  private observeCard(card: HTMLElement): void {
-    if (this.cards.has(card)) return;
-    this.cards.add(card);
-    this.dirtyCards.add(card);
-    this.visibilityObserver.observe(card);
-  }
-
-  private removeDetachedCards(): void {
-    for (const card of this.cards) {
-      if (!this.container.contains(card)) {
-        this.visibilityObserver.unobserve(card);
-        this.cards.delete(card);
-        this.visibleCards.delete(card);
-        this.dirtyCards.delete(card);
-      }
+    const cardElement = target.closest(this.scenario.cardSelector);
+    const card = cardElement && this.cards.get(cardElement);
+    if (mutation.type === 'attributes') {
+      if (!card) return;
+      card.linkDirty = true;
+      this.updateCard(card);
+      return;
     }
+
+    const links = this.scenario.linkSelector ?? 'a[href]';
+    let hasChangedElement = false;
+    let hasChangedLink = false;
+    mutation.addedNodes.forEach((node) => {
+      if (!(node instanceof Element) || node.matches(BADGE_SELECTOR) || !this.container.contains(node)) return;
+      // 卡片内部的变动只需检查链接和封面；列表新增的子树才需要发现新卡片。
+      if (!card) this.forEachCardElement(node, (element) => this.observeCard(element));
+      hasChangedElement = true;
+      if (card && (node.matches(links) || node.querySelector(links))) hasChangedLink = true;
+    });
+    mutation.removedNodes.forEach((node) => {
+      if (!(node instanceof Element) || node.matches(BADGE_SELECTOR)) return;
+      if (!card && !this.container.contains(node)) this.forEachCardElement(node, (element) => this.unobserveCard(element));
+      hasChangedElement = true;
+      if (card && (node.matches(links) || node.querySelector(links))) hasChangedLink = true;
+    });
+    if (!card || !hasChangedElement) return;
+    card.linkDirty ||= hasChangedLink;
+    card.anchorDirty = true;
+    if (card.nearby || card.linkDirty) this.updateCard(card);
   }
 
-  /** 只标注脏且可见的卡片；离开视口保留已有标签（照搬 BSB 缓存语义） */
-  private labelVisibleCard(card: HTMLElement): void {
-    if (this.dirtyCards.has(card) && this.visibleCards.has(card) && card.isConnected && this.container.contains(card)) {
-      this.dirtyCards.delete(card);
-      this.labelCard(card, this.scenario);
-    }
+  private forEachCardElement(root: Element, visit: (element: HTMLElement) => void): void {
+    const selector = this.scenario.cardSelector;
+    if (root instanceof HTMLElement && root.matches(selector)) visit(root);
+    root.querySelectorAll<HTMLElement>(selector).forEach(visit);
+  }
+
+  private observeCard(element: HTMLElement): void {
+    if (this.cards.has(element)) return;
+    const card: VideoCard = {
+      element,
+      scenario: this.scenario,
+      nearby: false,
+      bvid: null,
+      linkDirty: true,
+      anchorDirty: true,
+      badge: null,
+    };
+    this.cards.set(element, card);
+    this.visibilityObserver.observe(element);
+    this.updateCard(card);
+  }
+
+  private unobserveCard(element: HTMLElement): void {
+    const card = this.cards.get(element);
+    if (!card || this.container.contains(element)) return;
+    this.visibilityObserver.unobserve(element);
+    this.cards.delete(element);
+    this.release(card);
+  }
+
+  private release(card: VideoCard): void {
+    card.nearby = false;
+    this.releaseCard(card);
+    card.badge?.element.remove();
   }
 }
 
 export class VideoCardAnnotator {
-  /** bvid -> 云端结果；null 表示已查询但云端无数据 */
-  private static results = new Map<string, RemoteBatchItem | typeof NO_RESULT>();
-  /** 待查询的 bvid 队列（合批用） */
-  private static pending = new Set<string>();
-  private static flushTimer: number | null = null;
+  // 缓存成功查询的所有结果，包括无标签的视频；重复出现时直接使用页面内缓存。
+  private static readonly results = new Map<string, RemoteBatchItem | null>();
+  private static readonly waiting = new Map<string, Set<VideoCard>>();
+  private static readonly dirtyCards = new Set<VideoCard>();
+  private static readonly observedContainers = new Map<string, VagCardObserver>();
+
+  private static started = false;
+  private static renderFrame: number | null = null;
   private static rescanTimer: number | null = null;
-  /** 场景 key -> 观察器（照搬 BSB 的 observedContainers） */
-  private static observedContainers = new Map<string, VagCardObserver>();
-  private static rescanInterval: number | null = null;
-  /** 正在标注的卡片（照搬 BSB 的并发去重，防止对同一卡片并发插入标签） */
-  private static labeling = new Set<HTMLElement>();
-  /** 并发去重期间的待重跑场景 */
-  private static rerunScenarios = new WeakMap<HTMLElement, VideoCardScenario>();
+  private static flushTimer: number | null = null;
+  private static requesting = false;
+  private static lastQueuedAt = -Infinity;
+  private static lastRequestAt = -Infinity;
+  private static retryAt = -Infinity;
+  private static failures = 0;
 
   public static async start(): Promise<void> {
+    if (this.started) return;
     const settings = await chrome.storage.local.get(['enableExtension']);
-    if (settings.enableExtension === false) return;
+    if (settings.enableExtension === false || this.started) return;
 
+    this.started = true;
     this.refreshContainers();
-    if (!this.observedContainers.size) {
-      console.log('【VideoAdGuard】当前页面无匹配的视频卡片场景，标注器未启动');
-      return;
-    }
-
-    // 兜底轮询：SPA 站内跳转 / 容器整体替换时刷新场景集（BSB 靠 URL watcher，此处用等价的低频轮询）
-    this.rescanInterval = window.setInterval(() => this.refreshContainers(), 3000);
-    console.log('【VideoAdGuard】视频卡片标注已启动，场景:', [...this.observedContainers.keys()].join(', '));
+    // 只检查场景和容器是否换了；沿用现有容器时不会重新遍历卡片。
+    window.setInterval(() => this.refreshContainers(), 3000);
   }
 
-  /** 刷新场景容器集：按当前 URL 的场景列表增删观察器（照搬 BSB 的 refreshThumbnailContainers） */
+  /** SPA 换页或容器加载较晚时发现新容器，已有容器继续增量观察。 */
   private static refreshContainers(): void {
-    const activeKeys = new Set<string>();
+    const activeKeys = new Set(getVideoCardScenarios(location.href));
+    for (const [key, observer] of this.observedContainers) {
+      if (activeKeys.has(key) && observer.container.isConnected) continue;
+      observer.disconnect();
+      this.observedContainers.delete(key);
+    }
 
-    for (const key of getVideoCardScenarios(location.href)) {
+    for (const key of activeKeys) {
+      if (this.observedContainers.has(key)) continue;
       const scenario = VIDEO_CARD_SCENARIOS[key];
       if (!scenario) continue;
-      activeKeys.add(key);
-
-      const observed = this.observedContainers.get(key);
-      // 容器仍在：沿用现有观察器
-      if (observed && observed.container.isConnected) continue;
-      // 容器被替换：重建（observer 的 disconnect 已由其自身触发）
-      if (observed) this.observedContainers.delete(key);
-
-      const root = resolveScenarioRoot(scenario, document);
-      if (!root) continue; // 美化插件未安装/未就绪，静默跳过
-      const container = root.querySelector(scenario.containerSelector);
+      const container = resolveScenarioRoot(scenario, document)?.querySelector(scenario.containerSelector);
       if (!container) continue;
 
       this.observedContainers.set(key, new VagCardObserver(
         container, scenario,
-        (card, scenarioForCard) => void this.labelCard(card, scenarioForCard),
+        (card) => this.scheduleRender(card),
+        (card) => {
+          this.dirtyCards.delete(card);
+          this.removeFromQueue(card);
+        },
         () => this.rescanSoon(),
       ));
     }
-
-    // 移除不再活跃的场景
-    for (const key of [...this.observedContainers.keys()]) {
-      if (!activeKeys.has(key)) {
-        this.observedContainers.get(key)?.disconnect();
-        this.observedContainers.delete(key);
-      }
-    }
   }
 
-  /** 防抖重扫（照搬 BSB 的 checkPageForNewThumbnails 100ms 防抖） */
   private static rescanSoon(): void {
-    if (this.rescanTimer) return;
+    if (this.rescanTimer !== null) return;
     this.rescanTimer = window.setTimeout(() => {
       this.rescanTimer = null;
       this.refreshContainers();
     }, 100);
   }
 
-  /**
-   * 标注单张卡片（照搬 BSB 的 labelThumbnail 并发去重结构）。
-   * 数据未查询时仅入队；flush 返回后会 refresh 观察器重标可见卡片。
-   */
-  private static async labelCard(card: HTMLElement, scenario: VideoCardScenario): Promise<void> {
-    if (this.labeling.has(card)) {
-      this.rerunScenarios.set(card, scenario);
-      return;
-    }
-    this.labeling.add(card);
-
-    try {
-      await this.labelCardProcess(card, scenario);
-    } finally {
-      this.labeling.delete(card);
-      const rerun = this.rerunScenarios.get(card);
-      this.rerunScenarios.delete(card);
-      if (rerun && card.isConnected) void this.labelCard(card, rerun);
-    }
+  /** 将同一帧的卡片更新合并，先读封面位置，再统一改标签，避免反复触发布局。 */
+  private static scheduleRender(card: VideoCard): void {
+    this.dirtyCards.add(card);
+    if (this.renderFrame !== null) return;
+    this.renderFrame = window.requestAnimationFrame(() => {
+      this.renderFrame = null;
+      const changes: Array<() => void> = [];
+      for (const candidate of this.dirtyCards) {
+        if (!candidate.element.isConnected) continue;
+        const change = this.prepareCard(candidate);
+        if (change) changes.push(change);
+      }
+      this.dirtyCards.clear();
+      for (const change of changes) change();
+    });
   }
 
-  private static async labelCardProcess(card: HTMLElement, scenario: VideoCardScenario): Promise<void> {
-    // 卡片复用检测：标记挂卡片根（照搬 BSB 的 data-bsb-bvid 挂 thumbnail 根）
-    let bvid = card.getAttribute(DATA_BVID_ATTR);
-    const extracted = extractBvidFromCard(scenario, card);
-    if (extracted !== bvid) {
-      // bvid 变化或首次处理：清旧标签
-      this.hideLabel(card);
-      bvid = extracted;
-      if (!bvid) return;
-      card.setAttribute(DATA_BVID_ATTR, bvid);
-      this.pending.add(bvid);
+  private static prepareCard(card: VideoCard): (() => void) | undefined {
+    if (card.linkDirty) {
+      card.linkDirty = false;
+      const bvid = extractBvidFromCard(card.scenario, card.element);
+      if (bvid !== card.bvid) {
+        this.removeFromQueue(card);
+        card.bvid = bvid;
+        if (bvid && !this.results.has(bvid)) this.queueCard(bvid, card);
+      }
+    }
+
+    if (!card.nearby) return;
+    const item = card.bvid ? this.results.get(card.bvid) : null;
+    if (!card.bvid || !item) {
+      if (!card.badge) return;
+      return () => {
+        card.badge?.element.remove();
+        card.badge = null;
+      };
+    }
+
+    const bvid = card.bvid;
+    const previousBadge = card.badge?.bvid === bvid ? card.badge : null;
+    if (previousBadge?.element.isConnected && !card.anchorDirty) return;
+    card.anchorDirty = false;
+
+    const anchorSelector = card.scenario.labelAnchorSelector;
+    // 封面还未渲染时先挂在卡片根；封面出现后由 DOM 观察器移动同一个标签。
+    const anchor = (anchorSelector && card.element.querySelector(anchorSelector)) || card.element;
+    const host = anchor === card.element ? card.element : anchor.parentElement;
+    if (!host) return;
+    if (previousBadge?.anchor === anchor && previousBadge.element.parentElement === host) return;
+
+    const badge = previousBadge?.element ?? this.buildBadgeContainer(item);
+    if (!badge) return;
+    const needsPosition = window.getComputedStyle(host).position === 'static';
+    return () => {
+      if (card.badge?.element !== badge) card.badge?.element.remove();
+      if (needsPosition) host.style.position = 'relative';
+      if (anchor === card.element) host.appendChild(badge);
+      else anchor.after(badge);
+      card.badge = { bvid, anchor, element: badge };
+    };
+  }
+
+  private static queueCard(bvid: string, card: VideoCard): void {
+    const cards = this.waiting.get(bvid);
+    if (cards) {
+      cards.add(card);
+      return;
+    }
+
+    this.waiting.set(bvid, new Set([card]));
+    this.lastQueuedAt = performance.now();
+    if (this.failures >= MAX_CONSECUTIVE_FAILURES) this.failures = 0;
+    // 队列攒够时，提前原本为小批量安排的计时器。
+    if (this.waiting.size === MIN_BATCH_SIZE) this.clearFlushTimer();
+    this.scheduleFlush();
+  }
+
+  private static removeFromQueue(card: VideoCard): void {
+    if (!card.bvid) return;
+    const cards = this.waiting.get(card.bvid);
+    if (!cards?.delete(card) || cards.size > 0) return;
+    this.waiting.delete(card.bvid);
+    if (!this.waiting.size) this.clearFlushTimer();
+  }
+
+  private static clearFlushTimer(): void {
+    if (this.flushTimer === null) return;
+    window.clearTimeout(this.flushTimer);
+    this.flushTimer = null;
+  }
+
+  private static nextRequestAt(): number {
+    const largeBatch = this.lastRequestAt === -Infinity || this.waiting.size >= MIN_BATCH_SIZE;
+    const gatherUntil = this.lastQueuedAt + (largeBatch ? BATCH_GATHER_MS : PARTIAL_BATCH_GATHER_MS);
+    return Math.max(gatherUntil, this.lastRequestAt + MIN_REQUEST_INTERVAL_MS, this.retryAt);
+  }
+
+  /** 仅按新加载的视频攒批；零散视频稍后补查，失败最多自动重试一次。 */
+  private static scheduleFlush(): void {
+    if (this.flushTimer !== null || this.requesting || !this.waiting.size || this.failures >= MAX_CONSECUTIVE_FAILURES) return;
+    const delay = Math.max(0, this.nextRequestAt() - performance.now());
+    this.flushTimer = window.setTimeout(() => {
+      this.flushTimer = null;
+      if (!this.waiting.size) return;
+      if (performance.now() < this.nextRequestAt()) {
+        this.scheduleFlush();
+        return;
+      }
+      void this.flush();
+    }, delay);
+  }
+
+  private static async flush(): Promise<void> {
+    const bvids = [];
+    for (const bvid of this.waiting.keys()) {
+      bvids.push(bvid);
+      if (bvids.length === MAX_BATCH_SIZE) break;
+    }
+    this.requesting = true;
+    this.lastRequestAt = performance.now();
+    try {
+      const data = await CloudCacheService.fetchRemoteBatch(bvids);
+      if (!data) {
+        this.failures += 1;
+        this.retryAt = performance.now() + RETRY_DELAY_MS;
+        return;
+      }
+
+      this.failures = 0;
+      this.retryAt = -Infinity;
+      for (const bvid of bvids) {
+        const item = data[bvid];
+        const hasBadge = item?.ad?.exist || item?.aiScript || typeof item?.aiScriptLabel === 'boolean';
+        this.results.set(bvid, hasBadge ? item : null);
+        const cards = this.waiting.get(bvid);
+        this.waiting.delete(bvid);
+        if (hasBadge && cards) {
+          for (const card of cards) {
+            if (card.nearby) this.scheduleRender(card);
+          }
+        }
+      }
+    } finally {
+      this.requesting = false;
       this.scheduleFlush();
-      return;
-    }
-    if (!bvid) return;
-
-    // 查询结果未到达：等待下一次 refresh
-    if (!this.results.has(bvid)) return;
-
-    const item = this.results.get(bvid);
-    if (!item) {
-      // 已查询且云端无数据：无标签
-      this.hideLabel(card);
-      return;
-    }
-
-    const container = this.buildBadgeContainer(item);
-    if (!container) {
-      this.hideLabel(card);
-      return;
-    }
-
-    // 等锚点渲染完成再插入（照搬 BSB：锚点可能晚于卡片出现，立即查会插错位置）
-    const labelAnchor = await waitFor(
-      () => (scenario.labelAnchorSelector ? card.querySelector(scenario.labelAnchorSelector) : card),
-      10000, 100
-    ).catch(() => null) as HTMLElement | null
-      // 锚点缺失时兜底到最后一个子元素，保证标签仍落在卡片内部（照搬 BSB 的 lastElementChild 兜底）
-      ?? card.lastElementChild as HTMLElement | null;
-    if (!labelAnchor?.parentNode || !card.isConnected) return;
-    this.hideLabel(card);
-
-    if (labelAnchor !== card && labelAnchor.parentElement) {
-      // 标签插为锚点的兄弟节点（照搬 BSB 的 labelAnchor.after）：锚点可能是
-      // <picture>/<img> 这类无法承载子元素定位的元素，塞内部会不可见。
-      // 定位上下文补在锚点父元素（封面容器，有实际尺寸）上。
-      const host = labelAnchor.parentElement as HTMLElement;
-      if (window.getComputedStyle(host).position === 'static') host.style.position = 'relative';
-      labelAnchor.after(container);
-    } else {
-      if (window.getComputedStyle(card).position === 'static') card.style.position = 'relative';
-      card.appendChild(container);
     }
   }
 
@@ -343,7 +385,13 @@ export class VideoCardAnnotator {
     }
 
     const ai = item.aiScript;
-    if (ai) {
+    if (typeof item.aiScriptLabel === 'boolean') {
+      labels.push({
+        text: aiScriptLabelText(item.aiScriptLabel),
+        color: item.aiScriptLabel ? '#f25d8e' : '#9499a0',
+        title: '人工标注',
+      });
+    } else if (ai) {
       labels.push({
         text: `AI 感 ${ai.aiScore}`,
         color: ai.aiScore >= 70 ? '#f25d8e' : ai.aiScore >= 40 ? '#ff7f24' : '#9499a0',
@@ -390,39 +438,5 @@ export class VideoCardAnnotator {
       container.appendChild(el);
     }
     return container;
-  }
-
-  /** 清除卡片子树内的全部标签 */
-  private static hideLabel(card: Element): void {
-    card.querySelectorAll(`.${BADGE_CONTAINER_CLASS}`).forEach((el) => el.remove());
-  }
-
-  /** 合批：新 bvid 收集 500ms 后一次查询，减少请求数 */
-  private static scheduleFlush(): void {
-    if (this.flushTimer || !this.pending.size) return;
-    this.flushTimer = window.setTimeout(() => { void this.flush(); }, 500);
-  }
-
-  private static async flush(): Promise<void> {
-    this.flushTimer = null;
-    // 服务端单次上限 30 个，超出部分留在队列下一轮
-    const bvids = [...this.pending].slice(0, 30);
-    for (const bvid of bvids) this.pending.delete(bvid);
-    if (!bvids.length) return;
-
-    const data = await CloudCacheService.fetchRemoteBatch(bvids);
-    if (data) {
-      // 查询成功：无数据的视频记为 NO_RESULT（明确无标签），有数据的记入缓存
-      for (const bvid of bvids) {
-        this.results.set(bvid, data?.[bvid] ?? NO_RESULT);
-      }
-    } else {
-      // 查询失败：保持待查询状态，重新入队等下一轮重试（失败≠云端无数据）
-      for (const bvid of bvids) this.pending.add(bvid);
-    }
-    for (const observer of this.observedContainers.values()) {
-      observer.refresh(true);
-    }
-    if (this.pending.size) this.scheduleFlush();
   }
 }
