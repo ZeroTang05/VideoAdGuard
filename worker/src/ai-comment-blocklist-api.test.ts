@@ -29,7 +29,7 @@ function createEnv() {
 }
 
 describe('Cloudflare Worker 疑似 AI 评论作者接口', () => {
-  it('两次提交后 GET 返回共享 UID', async () => {
+  it('首次提交后 GET 返回共享 UID', async () => {
     const env = createEnv();
     const request = (body: string) => worker.fetch(new Request('https://worker.test/api/ai-comment-blocklist', {
       method: 'POST',
@@ -38,7 +38,7 @@ describe('Cloudflare Worker 疑似 AI 评论作者接口', () => {
     }), env);
 
     expect((await (await request(JSON.stringify({ uid: '3546999999999999' }))).json()).data).toEqual({
-      uid: '3546999999999999', count: 1, shared: false,
+      uid: '3546999999999999', count: 1, shared: true,
     });
     expect((await (await request(JSON.stringify({ uid: '3546999999999999' }))).json()).data).toEqual({
       uid: '3546999999999999', count: 2, shared: true,
@@ -64,6 +64,6 @@ describe('Cloudflare Worker 疑似 AI 评论作者接口', () => {
     await env.VIDEO_AD_GUARD_KV.put(AI_COMMENT_SHARED_PREFIX + '100', '1');
     await env.VIDEO_AD_GUARD_KV.put('comment-ai-report:200', '1');
     const response = await worker.fetch(new Request('https://worker.test/api/ai-comment-blocklist'), env);
-    expect((await response.json()).data.uids).toEqual(['100']);
+    expect((await response.json()).data.uids).toEqual(['100', '200']);
   });
 });

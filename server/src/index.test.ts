@@ -49,12 +49,12 @@ describe('自建缓存服务 API', () => {
     expect(res.body.success).toBe(true);
   });
 
-  it('第二次提交立即发布 UID，同来源的并发提交各计一次', async () => {
+  it('首次提交立即发布 UID，同来源的并发提交各计一次', async () => {
     const path = '/api/ai-comment-blocklist';
     const uid = '3546999999999999';
     const first = await request(appWithDb).post(path).send({ uid });
-    expect(first.body.data).toEqual({ uid, count: 1, shared: false });
-    expect((await request(appWithDb).get(path)).body.data.uids).not.toContain(uid);
+    expect(first.body.data).toEqual({ uid, count: 1, shared: true });
+    expect((await request(appWithDb).get(path)).body.data.uids).toContain(uid);
 
     const responses = await Promise.all([1, 2].map(() => request(appWithDb).post(path).send({ uid })));
     expect(responses.map(result => result.body.data.count).sort()).toEqual([2, 3]);

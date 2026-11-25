@@ -35,22 +35,31 @@ export function kvPut(key: string, value: string): void {
   getDb().putSync(key, value);
 }
 
-/** 同一个事务内累计请求次数，第二次提交时发布 UID。 */
+/** 同一个事务内累计请求次数，首次提交时发布 UID。 */
 export function countAiCommentReport(uid: string): { count: number; shared: boolean } {
   const store = getDb();
   return store.transactionSync(() => {
     const key = AI_COMMENT_REPORT_PREFIX + uid;
     const count = Number(store.get(key) ?? '0') + 1;
     store.putSync(key, String(count));
-    if (count === 2) store.putSync(AI_COMMENT_SHARED_PREFIX + uid, '1');
-    return { count, shared: count >= 2 };
+    store.putSync(AI_COMMENT_SHARED_PREFIX + uid, '1');
+    return { count, shared: true };
   });
 }
 
-/** 仅遍历已发布名单的键，未达到两次的 UID 不参与下发。 */
+/** 遍历已发布标记和旧版计数键，兼容阈值调整前的首次提交记录。 */
 export function listSharedAiCommentUids(): string[] {
-  const keys = getDb().getKeys({ start: AI_COMMENT_SHARED_PREFIX, end: 'comment-ai-shared;' });
-  return Array.from(keys, key => key.slice(AI_COMMENT_SHARED_PREFIX.length));
+  const store = getDb();
+  const uids = new Set<string>();
+  const sharedKeys = store.getKeys({ start: AI_COMMENT_SHARED_PREFIX, end: 'comment-ai-shared;' });
+  for (const key of sharedKeys) uids.add(key.slice(AI_COMMENT_SHARED_PREFIX.length));
+
+  const reportKeys = store.getKeys({ start: AI_COMMENT_REPORT_PREFIX, end: 'comment-ai-report;' });
+  for (const key of reportKeys) {
+    const count = Number.parseInt(store.get(key) ?? '0', 10);
+    if (Number.isSafeInteger(count) && count >= 1) uids.add(key.slice(AI_COMMENT_REPORT_PREFIX.length));
+  }
+  return [...uids];
 }
 
 /** 测试用：关闭连接。 */

@@ -42,20 +42,20 @@ describe('疑似 AI 评论作者共享名单', () => {
     expect(isValidCommentUid(123)).toBe(false);
   });
 
-  it('第二次提交后发布 UID', async () => {
+  it('首次提交后发布 UID', async () => {
     const store = new MemoryStore();
-    expect(await countCommentReport(store, '3546999999999999')).toEqual({ count: 1, shared: false });
-    expect(await listSharedCommentUids(store)).toEqual([]);
+    expect(await countCommentReport(store, '3546999999999999')).toEqual({ count: 1, shared: true });
+    expect(await listSharedCommentUids(store)).toEqual(['3546999999999999']);
     expect(await countCommentReport(store, '3546999999999999')).toEqual({ count: 2, shared: true });
     expect(await listSharedCommentUids(store)).toEqual(['3546999999999999']);
   });
 
-  it('处理共享名单分页并忽略计数键', async () => {
+  it('处理共享名单分页并兼容旧版计数键', async () => {
     const store = new MemoryStore();
     await store.put(AI_COMMENT_SHARED_PREFIX + '100', '1');
     await store.put(AI_COMMENT_SHARED_PREFIX + '200', '1');
     await store.put(AI_COMMENT_SHARED_PREFIX + '300', '1');
     await store.put('comment-ai-report:400', '1');
-    expect(await listSharedCommentUids(store)).toEqual(['100', '200', '300']);
+    expect(await listSharedCommentUids(store)).toEqual(['100', '200', '300', '400']);
   });
 });

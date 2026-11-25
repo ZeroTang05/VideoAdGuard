@@ -38,7 +38,7 @@
 | POST | `/api/ai-script`、`/api/ai-script/part` | 保存 AI 感评分 |
 | POST | `/api/ai-script-label`、`/api/ai-script-label/part` | 保存人工文案标注 |
 | GET | `/api/ai-comment-blocklist` | 查询已共享的疑似 AI 评论作者 UID |
-| POST | `/api/ai-comment-blocklist` | 提交 `{ uid }`，累计两次后共享 UID |
+| POST | `/api/ai-comment-blocklist` | 提交 `{ uid }`，首次提交后共享 UID |
 | POST | `/api/batch` | 批量查询广告与 AI 文案数据 |
 
 ### GET /api/cache/:bvid 响应
