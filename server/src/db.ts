@@ -7,6 +7,8 @@ const DB_PATH = process.env.DB_PATH || join(process.cwd(), 'data', 'cache.lmdb')
 
 // AI 文案评分的键前缀，与 Worker 保持一致
 export const AI_SCRIPT_KV_PREFIX = 'ai:';
+const AI_COMMENT_REPORT_PREFIX = 'comment-ai-report:';
+const AI_COMMENT_SHARED_PREFIX = 'comment-ai-shared:';
 
 let db: RootDatabase<string, string> | undefined;
 
@@ -31,6 +33,24 @@ export function kvGet(key: string): string | null {
 
 export function kvPut(key: string, value: string): void {
   getDb().putSync(key, value);
+}
+
+/** 同一个事务内累计请求次数，第二次提交时发布 UID。 */
+export function countAiCommentReport(uid: string): { count: number; shared: boolean } {
+  const store = getDb();
+  return store.transactionSync(() => {
+    const key = AI_COMMENT_REPORT_PREFIX + uid;
+    const count = Number(store.get(key) ?? '0') + 1;
+    store.putSync(key, String(count));
+    if (count === 2) store.putSync(AI_COMMENT_SHARED_PREFIX + uid, '1');
+    return { count, shared: count >= 2 };
+  });
+}
+
+/** 仅遍历已发布名单的键，未达到两次的 UID 不参与下发。 */
+export function listSharedAiCommentUids(): string[] {
+  const keys = getDb().getKeys({ start: AI_COMMENT_SHARED_PREFIX, end: 'comment-ai-shared;' });
+  return Array.from(keys, key => key.slice(AI_COMMENT_SHARED_PREFIX.length));
 }
 
 /** 测试用：关闭连接。 */

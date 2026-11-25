@@ -74,6 +74,7 @@ interface CloudCacheRequestMessage extends BaseMessage {
     method: 'GET' | 'POST';
     headers: Record<string, string>;
     body?: Record<string, unknown>;
+    writeOrderKey?: string;
   };
 }
 
@@ -459,8 +460,25 @@ class AudioTranscriptionHandler {
 // 云端缓存请求处理器
 class CloudCacheRequestHandler {
   private static readonly REQUEST_TIMEOUT_MS = 3000;
+  private static readonly pendingWrites = new Map<string, Promise<void>>();
 
   static async handle(payload: CloudCacheRequestMessage['payload'], sendResponse: (response: ApiResponse) => void): Promise<void> {
+    if (!payload.writeOrderKey) return this.request(payload, sendResponse);
+
+    // 同一后端同一分 P 按点击顺序写入，其他分 P 和后端继续并行。
+    const key = `${payload.url}|${payload.writeOrderKey}`;
+    const previous = this.pendingWrites.get(key);
+    const send = () => this.request(payload, sendResponse);
+    const pending = previous ? previous.then(send, send) : send();
+    this.pendingWrites.set(key, pending);
+    try {
+      await pending;
+    } finally {
+      if (this.pendingWrites.get(key) === pending) this.pendingWrites.delete(key);
+    }
+  }
+
+  private static async request(payload: CloudCacheRequestMessage['payload'], sendResponse: (response: ApiResponse) => void): Promise<void> {
     try {
       const { url, method, headers, body } = payload;
 

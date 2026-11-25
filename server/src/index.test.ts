@@ -49,6 +49,20 @@ describe('自建缓存服务 API', () => {
     expect(res.body.success).toBe(true);
   });
 
+  it('第二次提交立即发布 UID，同来源的并发提交各计一次', async () => {
+    const path = '/api/ai-comment-blocklist';
+    const uid = '3546999999999999';
+    const first = await request(appWithDb).post(path).send({ uid });
+    expect(first.body.data).toEqual({ uid, count: 1, shared: false });
+    expect((await request(appWithDb).get(path)).body.data.uids).not.toContain(uid);
+
+    const responses = await Promise.all([1, 2].map(() => request(appWithDb).post(path).send({ uid })));
+    expect(responses.map(result => result.body.data.count).sort()).toEqual([2, 3]);
+    expect(responses.every(result => result.body.data.shared)).toBe(true);
+    expect((await request(appWithDb).get(path)).body.data.uids.filter((item: string) => item === uid)).toEqual([uid]);
+    expect((await request(appWithDb).post(path).send({ uid: 123 })).status).toBe(400);
+  });
+
   it('POST /api/cache 保存后 GET 可查回', async () => {
     const save = await request(appWithDb).post('/api/cache').send(adBody);
     expect(save.body.success).toBe(true);

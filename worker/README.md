@@ -34,6 +34,12 @@
 |------|------|------|
 | GET | `/api/cache/:bvid` | 查询广告缓存（仅返回 accurate 记录） |
 | POST | `/api/cache` | 保存/更新广告缓存 |
+| GET | `/api/ai-script/:bvid` | 查询 AI 感评分和人工文案标注 |
+| POST | `/api/ai-script`、`/api/ai-script/part` | 保存 AI 感评分 |
+| POST | `/api/ai-script-label`、`/api/ai-script-label/part` | 保存人工文案标注 |
+| GET | `/api/ai-comment-blocklist` | 查询已共享的疑似 AI 评论作者 UID |
+| POST | `/api/ai-comment-blocklist` | 提交 `{ uid }`，累计两次后共享 UID |
+| POST | `/api/batch` | 批量查询广告与 AI 文案数据 |
 
 ### GET /api/cache/:bvid 响应
 
@@ -76,6 +82,8 @@
 
 - GET: 每 IP 每秒 2 次
 - POST: 每 IP 每分钟 10 次
+- 疑似 AI 评论作者名单查询：每 IP 每 10 秒 2 次
+- 疑似 AI 评论作者提交：每 IP 每分钟 20 次
 
 ## 安全
 

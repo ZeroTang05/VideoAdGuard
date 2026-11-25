@@ -9,6 +9,7 @@ export interface VideoPart {
 }
 
 interface VideoInfo {
+  aid: number;
   title: string;
   desc?: string;
   owner: { mid: number };
@@ -68,6 +69,19 @@ export class BilibiliService {
     );
     console.log('【VideoAdGuard】[BilibiliService] Comments result:', data);
     return data;
+  }
+
+  /** 用户发起标注且页面缺少 UID 时，只查询选中的那条评论。 */
+  public static async getCommentAuthor(aid: string, replyId: string): Promise<string> {
+    const data = await this.fetchWithCookie('https://api.bilibili.com/x/v2/reply/detail', {
+      type: 1, oid: aid, root: replyId,
+    });
+    const reply = data?.root;
+    const uid = reply?.mid_str ?? reply?.member?.mid;
+    if (reply?.rpid_str !== replyId || typeof uid !== 'string' || !/^[1-9]\d{0,19}$/.test(uid)) {
+      throw new Error('评论详情缺少匹配的作者 UID');
+    }
+    return uid;
   }
 
   public static async getTopComments(bvid: string) {

@@ -39,5 +39,5 @@ export function parseAiStyleScore(raw: string): number | null {
 
 /** 视频页与列表卡片共用人工标注的显示文字。 */
 export function aiScriptLabelText(isAiScript: boolean): string {
-  return isAiScript ? '像 AI 写的' : '像人工写的';
+  return isAiScript ? '疑似 AI 文案' : '非 AI 文案';
 }

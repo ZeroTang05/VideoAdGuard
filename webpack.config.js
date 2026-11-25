@@ -12,6 +12,8 @@ const createConfig = (browser) => ({
     content: './src/content.ts',
     popup: './src/popup.ts',
     background: './src/background.ts',
+    'comment-page': './src/comment-page.ts',
+    'comment-controls': './src/comment-controls.ts',
   },
   module: {
     rules: [

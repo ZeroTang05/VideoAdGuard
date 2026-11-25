@@ -9,6 +9,7 @@
  */
 
 import { AI_SCRIPT_LABEL_PREFIX, isValidCid, mergePartCache, PartCache, readLabelCache, selectVideoRecord } from '../../server/src/part-cache';
+import { countCommentReport, isValidCommentUid, listSharedCommentUids } from './ai-comment-blocklist';
 
 export interface Env {
   VIDEO_AD_GUARD_KV: KVNamespace;
@@ -262,6 +263,34 @@ export default {
 
     const url = new URL(request.url);
     const clientIP = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+
+    if (request.method === 'GET' && url.pathname === '/api/ai-comment-blocklist') {
+      if (!checkRateLimit(`ai-comment:get:${clientIP}`, RATE_LIMITS.getAiCommentBlocklist)) {
+        return errorResponse('请求过于频繁', 429);
+      }
+      const uids = await listSharedCommentUids(env.VIDEO_AD_GUARD_KV);
+      return jsonResponse({ success: true, data: { uids } });
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/ai-comment-blocklist') {
+      if (!checkRateLimit(`ai-comment:save:${clientIP}`, RATE_LIMITS.saveAiCommentBlocklist)) {
+        return errorResponse('请求过于频繁', 429);
+      }
+      const contentLength = request.headers.get('content-length');
+      if (contentLength && parseInt(contentLength, 10) > MAX_BODY_SIZE) {
+        return errorResponse('请求体过大', 400);
+      }
+      let body: Record<string, unknown>;
+      try {
+        body = await request.json() as Record<string, unknown>;
+      } catch {
+        return errorResponse('请求体必须是 JSON', 400);
+      }
+      const uid = body.uid;
+      if (!isValidCommentUid(uid)) return errorResponse('无效的评论者 UID', 400);
+      const result = await countCommentReport(env.VIDEO_AD_GUARD_KV, uid);
+      return jsonResponse({ success: true, data: { uid, ...result } });
+    }
 
     // GET /api/cache/:bvid
     const cacheMatch = url.pathname.match(/^\/api\/cache\/(?<bvid>.+)$/);

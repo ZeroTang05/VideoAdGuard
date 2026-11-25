@@ -35,6 +35,17 @@
   },
   "content_scripts": [
     {
+      "matches": ["https://www.bilibili.com/video/*"],
+      "js": ["comment-page.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://www.bilibili.com/video/*"],
+      "js": ["comment-controls.js"],
+      "run_at": "document_start"
+    },
+    {
       "matches": [
         "*://*.bilibili.com/video/*",
         "*://www.bilibili.com/*",

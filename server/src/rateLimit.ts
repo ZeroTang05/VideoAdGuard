@@ -19,6 +19,8 @@ export const RATE_LIMITS: Record<string, RateLimitConfig> = {
   getAiScript: { windowMs: 1000, max: 2 },
   saveAiScript: { windowMs: 60_000, max: 10 },
   getBatch: { windowMs: 1000, max: 2 },
+  getAiCommentBlocklist: { windowMs: 10_000, max: 2 },
+  saveAiCommentBlocklist: { windowMs: 60_000, max: 20 },
 };
 
 const RATE_LIMIT_CLEANUP_INTERVAL = 100;

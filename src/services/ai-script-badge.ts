@@ -1,5 +1,6 @@
 /** 视频信息行的 AI 感角标与两项人工标注。 */
 import { CloudCacheService } from './cloud-cache';
+import { AiScriptCacheService } from './ai-script-cache';
 import type { VideoPart } from './bilibili';
 import { aiScriptLabelText } from '../utils/script-result';
 
@@ -12,10 +13,8 @@ export class AiScriptBadge {
   private readonly badge = document.createElement('span');
   private readonly trigger = document.createElement('button');
   private readonly panel = document.createElement('div');
-  private readonly status = document.createElement('span');
   private mountTimer: number | undefined;
   private panelListeners: AbortController | undefined;
-  private saving = false;
   private manualLabel: boolean | null = null;
 
   constructor(private readonly part: VideoPart) {
@@ -44,13 +43,9 @@ export class AiScriptBadge {
       option.type = 'button';
       option.textContent = aiScriptLabelText(isAiScript);
       option.style.cssText = 'display:block;width:100%;border:0;border-radius:4px;background:transparent;padding:5px 10px;text-align:left;color:var(--text1,#18191c);font-size:12px;cursor:pointer;';
-      option.addEventListener('click', () => void this.submit(isAiScript));
+      option.addEventListener('click', () => this.submit(isAiScript));
       this.panel.appendChild(option);
     }
-    this.status.setAttribute('role', 'status');
-    this.status.style.cssText = 'display:block;color:#c22e4c;font-size:12px;';
-    this.panel.appendChild(this.status);
-
     this.container.append(this.badge, this.trigger);
   }
 
@@ -110,7 +105,6 @@ export class AiScriptBadge {
     const rightmost = window.innerWidth - PANEL_WIDTH - VIEWPORT_GUTTER;
     this.panel.style.left = `${Math.max(VIEWPORT_GUTTER, Math.min(anchor.right - PANEL_WIDTH, rightmost))}px`;
     this.panel.style.top = `${anchor.bottom + PANEL_GAP}px`;
-    this.status.textContent = '';
     document.body.appendChild(this.panel);
     this.trigger.setAttribute('aria-expanded', 'true');
 
@@ -143,22 +137,14 @@ export class AiScriptBadge {
     this.trigger.setAttribute('aria-expanded', 'false');
   }
 
-  /** 服务端确认写入后再更新角标，失败时保留原来的显示。 */
-  private async submit(isAiScript: boolean): Promise<void> {
-    if (this.saving) return;
-    this.saving = true;
-    this.status.textContent = '';
-    this.panel.setAttribute('aria-busy', 'true');
-    const success = await CloudCacheService.saveRemoteAIScriptLabel(this.part, isAiScript);
-    this.panel.removeAttribute('aria-busy');
-    this.saving = false;
-
-    if (!success) {
-      this.status.textContent = '提交失败，请重试';
-      return;
-    }
+  /** 点击后立即应用标注，本地保存和云端同步独立进行。 */
+  private submit(isAiScript: boolean): void {
     this.showLabel(isAiScript);
     if (this.panel.contains(document.activeElement)) this.trigger.focus({ preventScroll: true });
     this.closePanel();
+    void AiScriptCacheService.saveManualLabel(this.part, isAiScript).catch(error => {
+      console.warn('【VideoAdGuard】本地文案标注保存失败', error);
+    });
+    void CloudCacheService.saveRemoteAIScriptLabel(this.part, isAiScript);
   }
 }

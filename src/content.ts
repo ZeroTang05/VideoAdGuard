@@ -1143,62 +1143,44 @@ class AdDetector {
       transition: all 0.2s ease;
     `;
 
+    let showingFeedback = false;
     feedbackButton.addEventListener('mouseenter', () => {
+      if (showingFeedback) return;
       feedbackButton.style.background = 'rgba(255, 100, 100, 0.8)';
       feedbackButton.style.color = 'white';
       feedbackButton.style.borderColor = 'rgba(255, 255, 255, 0.6)';
     });
 
     feedbackButton.addEventListener('mouseleave', () => {
+      if (showingFeedback) return;
       feedbackButton.style.background = 'rgba(0, 0, 0, 0.8)';
       feedbackButton.style.color = 'rgba(255, 255, 255, 0.7)';
       feedbackButton.style.borderColor = 'rgba(255, 255, 255, 0.3)';
     });
 
-    feedbackButton.addEventListener('click', async () => {
-      if (signal.aborted) return;
-      const { bvid, cid } = part;
+    feedbackButton.addEventListener('click', () => {
+      if (signal.aborted || showingFeedback) return;
       const isUserModified = this.userModifiedSegments;
-      const ranges = this.adTimeRanges;
-      const cache = await CacheService.getDetectionResults(bvid, cid);
-      const cachedRecord = cache.part ?? cache.legacy;
-      const source = cachedRecord?.recordSource || (isUserModified ? 'user' : 'ai');
+      showingFeedback = true;
+      feedbackButton.textContent = isUserModified ? '✓ 已记录修正' : '✓ 已记录反馈';
+      feedbackButton.style.background = 'rgba(100, 200, 100, 0.9)';
+      feedbackButton.style.color = 'white';
+      feedbackButton.style.borderColor = 'rgba(255, 255, 255, 0.8)';
+      feedbackButton.style.width = 'auto';
+      feedbackButton.style.padding = '0 12px';
+      setTimeout(() => {
+        showingFeedback = false;
+        feedbackButton.textContent = '✗';
+        feedbackButton.style.background = 'rgba(0, 0, 0, 0.8)';
+        feedbackButton.style.color = 'rgba(255, 255, 255, 0.7)';
+        feedbackButton.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+        feedbackButton.style.width = '32px';
+        feedbackButton.style.padding = '0';
+      }, 2000);
 
-      const success = await CloudCacheService.saveRemoteCache(part, {
-        exist: ranges.length > 0,
-        goodName: cachedRecord?.goodName || [],
-        adTimeRanges: ranges,
-        model: cachedRecord?.model || 'unknown',
-        provider: cachedRecord?.provider || 'unknown',
-        detectedAt: cachedRecord?.detectedAt || Date.now(),
-        isDetectionConfident: cachedRecord?.isDetectionConfident ?? false,
-        accuracy: isUserModified ? 'accurate' : 'inaccurate',
-        source,
-        version: 1,
+      void this.saveAdFeedback(part, this.adTimeRanges, isUserModified).catch(error => {
+        console.warn('【VideoAdGuard】反馈后台同步失败', error);
       });
-
-      if (success) {
-        if (!isUserModified) {
-          // 仅在非用户修正情况下标记本地缓存为不准确
-          await CacheService.markAsInaccurate(bvid, cid);
-        }
-        if (signal.aborted) return;
-        feedbackButton.textContent = isUserModified ? '✓ 已提交修正' : '✓ 反馈成功';
-        feedbackButton.style.background = 'rgba(100, 200, 100, 0.9)';
-        feedbackButton.style.color = 'white';
-        feedbackButton.style.borderColor = 'rgba(255, 255, 255, 0.8)';
-        feedbackButton.style.width = 'auto';
-        feedbackButton.style.padding = '0 12px';
-        setTimeout(() => {
-          feedbackButton.textContent = '';
-          feedbackButton.innerHTML = '&#x2717;';
-          feedbackButton.style.background = 'rgba(0, 0, 0, 0.8)';
-          feedbackButton.style.color = 'rgba(255, 255, 255, 0.7)';
-          feedbackButton.style.borderColor = 'rgba(255, 255, 255, 0.3)';
-          feedbackButton.style.width = '32px';
-          feedbackButton.style.padding = '0';
-        }, 2000);
-      }
     });
 
     // 保存反馈按钮引用
@@ -1229,6 +1211,27 @@ class AdDetector {
     }
 
     console.log('【VideoAdGuard】已创建跳过按钮');
+  }
+
+  /** 同步点击时的广告区间，并在本地标记需要重新检测的结果。 */
+  private static async saveAdFeedback(part: VideoPart, ranges: number[][], isUserModified: boolean): Promise<void> {
+    const { bvid, cid } = part;
+    const cache = await CacheService.getDetectionResults(bvid, cid);
+    const cachedRecord = cache.part ?? cache.legacy;
+    if (!isUserModified) void CacheService.markAsInaccurate(bvid, cid);
+
+    await CloudCacheService.saveRemoteCache(part, {
+      exist: ranges.length > 0,
+      goodName: cachedRecord?.goodName || [],
+      adTimeRanges: ranges,
+      model: cachedRecord?.model || 'unknown',
+      provider: cachedRecord?.provider || 'unknown',
+      detectedAt: cachedRecord?.detectedAt || Date.now(),
+      isDetectionConfident: cachedRecord?.isDetectionConfident ?? false,
+      accuracy: isUserModified ? 'accurate' : 'inaccurate',
+      source: cachedRecord?.recordSource || (isUserModified ? 'user' : 'ai'),
+      version: 1,
+    });
   }
 
   // 移除跳过按钮的方法
@@ -1344,6 +1347,12 @@ class AIScriptDetector {
     const badge = new AiScriptBadge(part);
     this.badge = badge;
     try {
+      const localLabel = await AiScriptCacheService.getManualLabel(part);
+      if (!this.canScore(badge)) return;
+      if (localLabel !== undefined) {
+        badge.showLabel(localLabel);
+        return;
+      }
       const cached = await AiScriptCacheService.get(bvid, cid, page);
       if (!this.canScore(badge)) return;
       const remote = await CloudCacheService.fetchRemoteAIScript(part, Boolean(cached.part));

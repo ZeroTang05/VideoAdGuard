@@ -4,6 +4,7 @@
  */
 
 import { AI_SCRIPT_CRITERIA_VERSION } from './prompt';
+import type { VideoPart } from './bilibili';
 
 export interface AiScriptCacheItem {
   /** AI 感分数，0~100 整数 */
@@ -25,6 +26,21 @@ export class AiScriptCacheService {
   private static readonly CACHE_KEY = 'videoAdGuard_aiScriptCache';
   private static readonly CACHE_EXPIRY_DAYS = 1; // 与广告缓存一致：1 天过期
   private static readonly CACHE_EXPIRY_MS = AiScriptCacheService.CACHE_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+
+  private static manualLabelKey({ bvid, cid }: VideoPart): string {
+    return `aiScriptLabel:${bvid}:${cid}`;
+  }
+
+  /** 人工标注按分 P 单独保存，不随评分缓存过期。 */
+  public static async getManualLabel(part: VideoPart): Promise<boolean | undefined> {
+    const key = this.manualLabelKey(part);
+    const value = (await chrome.storage.local.get(key))[key];
+    return typeof value === 'boolean' ? value : undefined;
+  }
+
+  public static saveManualLabel(part: VideoPart, isAiScript: boolean): Promise<void> {
+    return chrome.storage.local.set({ [this.manualLabelKey(part)]: isAiScript });
+  }
 
   private static async getAll(): Promise<Record<string, AiScriptCacheValue>> {
     try {

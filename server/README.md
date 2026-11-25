@@ -22,6 +22,8 @@
 | GET | `/api/ai-script/:bvid` | 查询 AI 感评分，已有人工标注时附带 `aiScriptLabel` |
 | POST | `/api/ai-script` | 保存/更新 AI 感评分 |
 | POST | `/api/ai-script-label` | 提交 `{ bvid, isAiScript }`，后一次人工提交覆盖前一次 |
+| GET | `/api/ai-comment-blocklist` | 返回已进入共享名单的 UID |
+| POST | `/api/ai-comment-blocklist` | 提交 `{ uid }`，累计两次有效请求时发布该 UID |
 | POST | `/api/batch` | 批量查询（首页卡片标注，上限 30 个 BV 号） |
 | GET | `/` | 健康检查（探活用） |
 

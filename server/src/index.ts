@@ -13,7 +13,7 @@
  */
 
 import express from 'express';
-import { AI_SCRIPT_KV_PREFIX, kvGet, kvPut, initDb } from './db';
+import { AI_SCRIPT_KV_PREFIX, countAiCommentReport, kvGet, kvPut, initDb, listSharedAiCommentUids } from './db';
 import { maybeCleanupRateLimit, checkRateLimit, RATE_LIMITS } from './rateLimit';
 import { AI_SCRIPT_LABEL_PREFIX, isValidCid, mergePartCache, PartCache, readLabelCache, selectVideoRecord } from './part-cache';
 import {
@@ -175,6 +175,27 @@ app.post(['/api/ai-script-label', '/api/ai-script-label/part'], (req, res) => {
   const cache = mergePartCache(readLabelCache(kvGet(key)), { isAiScript }, isValidCid(cid) ? cid : undefined, page === 1);
   kvPut(key, JSON.stringify(cache.parts ? cache : isAiScript));
   res.json({ success: true, data: { bvid, cid, isAiScript } });
+});
+
+// 客户端只下载已发布名单，同一个 UID 的每次有效 POST 都独立计数。
+app.get('/api/ai-comment-blocklist', (req, res) => {
+  maybeCleanupRateLimit();
+  if (!checkRateLimit(`ai-comment:get:${req.ip}`, RATE_LIMITS.getAiCommentBlocklist)) {
+    return errorResponse(res, '请求过于频繁', 429);
+  }
+  res.json({ success: true, data: { uids: listSharedAiCommentUids() } });
+});
+
+app.post('/api/ai-comment-blocklist', (req, res) => {
+  maybeCleanupRateLimit();
+  if (!checkRateLimit(`ai-comment:save:${req.ip}`, RATE_LIMITS.saveAiCommentBlocklist)) {
+    return errorResponse(res, '请求过于频繁', 429);
+  }
+  const uid: unknown = req.body?.uid;
+  if (typeof uid !== 'string' || !/^[1-9]\d{0,19}$/.test(uid)) {
+    return errorResponse(res, '无效的评论者 UID');
+  }
+  res.json({ success: true, data: { uid, ...countAiCommentReport(uid) } });
 });
 
 // POST /api/batch：批量查询广告与 AI 感评分（首页卡片标注用）

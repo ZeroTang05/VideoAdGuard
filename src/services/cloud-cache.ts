@@ -31,6 +31,20 @@ interface WorkerResponse<T = unknown> {
 }
 
 export class CloudCacheService {
+  /** 共享名单在自建服务统一发布，读取结果只包含已达发布条件的 UID。 */
+  static async fetchAiCommentBlocklist(): Promise<string[] | null> {
+    const result = await this.fetchWorker(`${SELF_HOSTED_API_URL}/api/ai-comment-blocklist`, 'GET');
+    if (!result?.success) return null;
+    const data = result.data as { uids?: unknown } | undefined;
+    return Array.isArray(data?.uids) && data.uids.every(uid => typeof uid === 'string') ? data.uids : null;
+  }
+
+  /** 每次点击只向计数服务提交一次。 */
+  static async reportAiComment(uid: string): Promise<boolean> {
+    const result = await this.fetchWorker(`${SELF_HOSTED_API_URL}/api/ai-comment-blocklist`, 'POST', { uid });
+    return result?.success === true;
+  }
+
   /**
    * 双后端端点列表：自有服务器在前（读优先、规避 Cloudflare 限额），
    * Cloudflare 兜底。未配置自有服务器时只有 Cloudflare。
@@ -49,7 +63,8 @@ export class CloudCacheService {
   private static async fetchWorker(
     url: string,
     method: 'GET' | 'POST',
-    body?: Record<string, unknown>
+    body?: Record<string, unknown>,
+    writeOrderKey?: string,
   ): Promise<WorkerResponse | null> {
     try {
       const response = await chrome.runtime.sendMessage({
@@ -62,6 +77,7 @@ export class CloudCacheService {
             'X-Client-Version': CLIENT_VERSION,
           },
           body,
+          writeOrderKey,
         },
       });
 
@@ -109,11 +125,12 @@ export class CloudCacheService {
   private static async saveToAll(
     path: string,
     body: Record<string, unknown>,
-    label: string
+    label: string,
+    writeOrderKey?: string,
   ): Promise<boolean> {
     const endpoints = await this.getEndpoints();
     const results = await Promise.allSettled(
-      endpoints.map((base) => this.fetchWorker(`${base}${path}`, 'POST', body))
+      endpoints.map((base) => this.fetchWorker(`${base}${path}`, 'POST', body, writeOrderKey))
     );
 
     let savedCount = 0;
@@ -223,7 +240,9 @@ export class CloudCacheService {
 
   /** 同一分 P 的人工标注以最后一次保存为准。 */
   static async saveRemoteAIScriptLabel({ bvid, cid, page }: VideoPart, isAiScript: boolean): Promise<boolean> {
-    return this.saveToAll('/api/ai-script-label/part', { bvid, cid, page, isAiScript }, `文案标注 ${bvid} P${page}`);
+    return this.saveToAll(
+      '/api/ai-script-label/part', { bvid, cid, page, isAiScript }, `文案标注 ${bvid} P${page}`, `${bvid}:${cid}`,
+    );
   }
 
   static async saveRemoteAIScript(
