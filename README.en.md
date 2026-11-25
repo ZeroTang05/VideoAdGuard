@@ -32,6 +32,9 @@ It is not a keyword filter. It understands the difference between *"I use this k
 - **Interactive marking** — click a highlighted range on the progress bar to toggle it
 - **Smart cache** — results are cached locally, and a shared cloud cache lets the community reuse
   results across users
+- **AI script labels** — mark a video as suspected AI copy or non-AI copy from the video info row
+- **AI comment blocking** — mark suspected AI comments from Bilibili's native comment menu and
+  block the author immediately
 - **Multiple providers** — Zhipu AI, OpenAI, DeepSeek, Groq and others
 - **Fully local** — supports a local Ollama model, so subtitles never leave your machine
 - **Creator whitelist** — mark channels you trust and skip them
@@ -57,6 +60,18 @@ Chromium-based browsers.
 3. Open any Bilibili video that has subtitles — detection starts automatically.
 4. When an ad is found, a "skip ad" button appears in the player and the range is marked on the
    progress bar.
+
+See the [VideoAdGuard user guide](https://videoadguard.xiaobaozi.cn/guide/) for the three detection
+and feedback flows.
+
+### Feedback flows
+
+- **Embedded ads** — click the feedback button after detection. Adjust the highlighted range first
+  when you want to submit a corrected time range.
+- **AI copy** — click "标注" in the video information row, then choose 「疑似 AI 文案」 or
+  「非 AI 文案」. The label appears immediately while cloud synchronization continues in the background.
+- **AI comments** — open a comment's native `⋯` menu and choose 「疑似 AI 评论」. The author is
+  blocked immediately and the UID is shared after the first valid report.
 
 ## API configuration
 

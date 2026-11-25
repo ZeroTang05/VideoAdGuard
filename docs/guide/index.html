@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>使用教程 - VideoAdGuard</title>
+    <meta name="description" content="VideoAdGuard 使用教程，介绍广告、AI 文案和 AI 评论三类检测与反馈方式。">
+    <link rel="icon" type="image/png" sizes="32x32" href="https://imgbed.xiaobaozi.cn/file/blog/VideoAdGuard32.webp">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --ink: #262132;
+            --muted: #756d7e;
+            --pink: #ff6b9d;
+            --pink-deep: #dc4779;
+            --pink-pale: #fff1f6;
+            --violet: #5a4fa3;
+            --violet-deep: #30265e;
+            --violet-pale: #f1efff;
+            --line: #eadfe7;
+            --paper: #fffdfd;
+            --shadow: 0 18px 55px rgba(63, 35, 82, 0.11);
+        }
+
+        * { box-sizing: border-box; }
+
+        html { scroll-behavior: smooth; }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            background: #fbf8fa;
+            font-family: "Noto Sans SC", "DM Sans", sans-serif;
+            line-height: 1.75;
+        }
+
+        a { color: inherit; }
+
+        .shell {
+            width: min(1120px, calc(100% - 40px));
+            margin: 0 auto;
+        }
+
+        .site-header {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.28);
+            background: rgba(255, 253, 253, 0.86);
+            backdrop-filter: blur(18px);
+        }
+
+        .header-inner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            min-height: 70px;
+            gap: 24px;
+        }
+
+        .brand {
+            display: inline-flex;
+            align-items: center;
+            gap: 11px;
+            color: var(--ink);
+            text-decoration: none;
+            font-weight: 900;
+            letter-spacing: -0.04em;
+        }
+
+        .brand-mark {
+            display: grid;
+            place-items: center;
+            width: 36px;
+            height: 36px;
+            border-radius: 12px;
+            color: #fff;
+            background: linear-gradient(145deg, var(--pink), var(--violet));
+            box-shadow: 0 7px 18px rgba(220, 71, 121, 0.25);
+            font-family: "DM Sans", sans-serif;
+            font-size: 17px;
+        }
+
+        .header-links {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .header-links a { text-decoration: none; }
+        .header-links a:hover { color: var(--pink-deep); }
+
+        .hero {
+            position: relative;
+            overflow: hidden;
+            padding: 76px 0 72px;
+            color: #fff;
+            background:
+                radial-gradient(circle at 13% 20%, rgba(255, 255, 255, 0.2), transparent 27%),
+                radial-gradient(circle at 86% 70%, rgba(153, 139, 255, 0.42), transparent 34%),
+                linear-gradient(125deg, #e95089, #654fab 78%);
+        }
+
+        .hero::after {
+            content: "";
+            position: absolute;
+            width: 420px;
+            height: 420px;
+            right: -150px;
+            top: -180px;
+            border: 1px solid rgba(255, 255, 255, 0.28);
+            border-radius: 50%;
+            box-shadow: 0 0 0 38px rgba(255, 255, 255, 0.06), 0 0 0 78px rgba(255, 255, 255, 0.04);
+        }
+
+        .hero-grid {
+            position: relative;
+            z-index: 1;
+            display: grid;
+            grid-template-columns: 1.05fr 0.95fr;
+            gap: 56px;
+            align-items: center;
+        }
+
+        .hero h1 {
+            max-width: 680px;
+            margin: 0;
+            font-size: clamp(2.4rem, 6vw, 5.1rem);
+            line-height: 1.1;
+            letter-spacing: -0.07em;
+        }
+
+        .hero p {
+            max-width: 610px;
+            margin: 24px 0 0;
+            color: rgba(255, 255, 255, 0.84);
+            font-size: 1.08rem;
+        }
+
+        .hero-card {
+            padding: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            border-radius: 24px;
+            background: rgba(31, 22, 68, 0.28);
+            box-shadow: 0 22px 55px rgba(32, 20, 68, 0.22);
+        }
+
+        .hero-card-title {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 18px;
+            color: rgba(255, 255, 255, 0.66);
+            font-family: "DM Sans", sans-serif;
+            font-size: 12px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .hero-flow {
+            display: grid;
+            gap: 10px;
+        }
+
+        .hero-step {
+            display: grid;
+            grid-template-columns: 35px 1fr;
+            gap: 12px;
+            align-items: center;
+            padding: 12px 14px;
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.11);
+        }
+
+        .hero-step b {
+            display: grid;
+            place-items: center;
+            width: 30px;
+            height: 30px;
+            border-radius: 10px;
+            color: var(--violet-deep);
+            background: #fff;
+            font-family: "DM Sans", sans-serif;
+        }
+
+        .hero-step span { font-size: 14px; }
+
+        .quick-nav {
+            display: flex;
+            gap: 10px;
+            padding: 18px 0 0;
+            overflow-x: auto;
+        }
+
+        .quick-nav a {
+            flex: 0 0 auto;
+            padding: 8px 14px;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            color: var(--muted);
+            background: #fff;
+            font-size: 13px;
+            text-decoration: none;
+        }
+
+        .quick-nav a:hover,
+        .quick-nav a:focus-visible {
+            color: var(--pink-deep);
+            border-color: #efacc2;
+            outline: none;
+        }
+
+        main { padding: 64px 0 90px; }
+
+        .section-intro {
+            display: grid;
+            grid-template-columns: 0.7fr 1.3fr;
+            gap: 40px;
+            align-items: end;
+            margin-bottom: 30px;
+        }
+
+        .section-intro h2 {
+            margin: 0;
+            font-size: clamp(1.8rem, 4vw, 3rem);
+            line-height: 1.2;
+            letter-spacing: -0.06em;
+        }
+
+        .section-intro p {
+            max-width: 640px;
+            margin: 0;
+            color: var(--muted);
+        }
+
+        .flow-line {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 12px;
+            margin: 0 0 78px;
+        }
+
+        .flow-node {
+            position: relative;
+            min-height: 112px;
+            padding: 17px;
+            border-top: 3px solid var(--pink);
+            background: #fff;
+            box-shadow: 0 9px 26px rgba(63, 35, 82, 0.06);
+        }
+
+        .flow-node::after {
+            content: "";
+            position: absolute;
+            top: 25px;
+            right: -14px;
+            width: 16px;
+            height: 1px;
+            background: #e5bfd0;
+        }
+
+        .flow-node:last-child::after { display: none; }
+        .flow-node strong { display: block; margin-bottom: 5px; font-size: 15px; }
+        .flow-node span { color: var(--muted); font-size: 13px; line-height: 1.55; }
+
+        .guide-section { scroll-margin-top: 92px; margin-bottom: 86px; }
+
+        .guide-panel {
+            display: grid;
+            grid-template-columns: 0.88fr 1.12fr;
+            gap: 38px;
+            padding: 30px;
+            border: 1px solid var(--line);
+            border-radius: 26px;
+            background: var(--paper);
+            box-shadow: var(--shadow);
+        }
+
+        .guide-section:nth-of-type(odd) .guide-panel { background: #fff; }
+
+        .guide-copy h3 {
+            margin: 0 0 12px;
+            font-size: 1.7rem;
+            letter-spacing: -0.045em;
+        }
+
+        .guide-copy > p { margin: 0 0 21px; color: var(--muted); }
+
+        .steps { display: grid; gap: 13px; margin: 0; padding: 0; list-style: none; }
+
+        .steps li {
+            display: grid;
+            grid-template-columns: 29px 1fr;
+            gap: 10px;
+            align-items: start;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .steps li::before {
+            content: counter(item);
+            counter-increment: item;
+            display: grid;
+            place-items: center;
+            width: 27px;
+            height: 27px;
+            border-radius: 9px;
+            color: var(--pink-deep);
+            background: var(--pink-pale);
+            font-family: "DM Sans", sans-serif;
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .steps { counter-reset: item; }
+
+        .note {
+            margin-top: 22px;
+            padding: 12px 15px;
+            border-left: 3px solid var(--violet);
+            color: var(--violet-deep);
+            background: var(--violet-pale);
+            font-size: 13px;
+        }
+
+        .demo-window {
+            overflow: hidden;
+            min-height: 285px;
+            border: 1px solid #2c244f;
+            border-radius: 18px;
+            color: #eeeaff;
+            background: #211a3e;
+            box-shadow: 0 14px 35px rgba(48, 38, 94, 0.2);
+        }
+
+        .window-bar {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 13px 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+            color: #aaa2c5;
+            font-family: "DM Sans", sans-serif;
+            font-size: 11px;
+        }
+
+        .window-dot { width: 7px; height: 7px; border-radius: 50%; background: #ff7da9; }
+        .window-dot:nth-child(2) { background: #ffc66e; }
+        .window-dot:nth-child(3) { background: #73d4ad; }
+
+        .window-body { padding: 25px; }
+
+        .timeline {
+            position: relative;
+            height: 36px;
+            margin: 30px 0 24px;
+            border-radius: 9px;
+            background: #3c335d;
+        }
+
+        .timeline::before {
+            content: "";
+            position: absolute;
+            left: 12%;
+            right: 16%;
+            top: 16px;
+            height: 4px;
+            border-radius: 4px;
+            background: #5b4d7f;
+        }
+
+        .ad-range {
+            position: absolute;
+            left: 44%;
+            width: 21%;
+            top: 8px;
+            height: 20px;
+            border-radius: 7px;
+            background: #ff6b9d;
+            box-shadow: 0 0 0 4px rgba(255, 107, 157, 0.18);
+        }
+
+        .range-label {
+            display: inline-flex;
+            padding: 7px 10px;
+            border-radius: 8px;
+            color: #ffc2d7;
+            background: rgba(255, 107, 157, 0.14);
+            font-size: 12px;
+        }
+
+        .player-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        .fake-button {
+            padding: 7px 11px;
+            border-radius: 7px;
+            color: #fff;
+            background: #5f4ca1;
+            font-size: 12px;
+        }
+
+        .fake-button.outline { color: #ffb5ce; background: transparent; border: 1px solid #775f9b; }
+
+        .badge-stage {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 235px;
+            padding: 30px;
+            background: linear-gradient(145deg, #272044, #392d61);
+        }
+
+        .info-row {
+            width: min(100%, 360px);
+            padding: 18px;
+            border-radius: 15px;
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .info-row small { color: #c2b9db; font-size: 11px; }
+
+        .info-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 15px;
+            margin: 11px 0 17px;
+            font-size: 15px;
+        }
+
+        .label-badge {
+            display: inline-flex;
+            padding: 4px 8px;
+            border: 1px solid rgba(255, 107, 157, 0.6);
+            border-radius: 6px;
+            color: #ffb6ce;
+            background: rgba(255, 107, 157, 0.16);
+            font-size: 11px;
+            white-space: nowrap;
+        }
+
+        .menu {
+            width: 230px;
+            margin-left: auto;
+            padding: 10px;
+            border-radius: 13px;
+            background: #fff;
+            color: var(--ink);
+            box-shadow: 0 16px 30px rgba(12, 7, 28, 0.23);
+        }
+
+        .menu-label { padding: 5px 8px 9px; color: #9a91a4; font-size: 11px; }
+
+        .menu-item {
+            padding: 9px 8px;
+            border-radius: 8px;
+            font-size: 13px;
+        }
+
+        .menu-item.selected { color: var(--pink-deep); background: var(--pink-pale); font-weight: 700; }
+
+        .comment-stage {
+            min-height: 285px;
+            padding: 24px;
+            background: #f5f2f7;
+        }
+
+        .comment-row {
+            position: relative;
+            display: grid;
+            grid-template-columns: 38px 1fr 25px;
+            gap: 11px;
+            align-items: start;
+            padding: 16px;
+            border: 1px solid #e8dfeb;
+            border-radius: 14px;
+            background: #fff;
+        }
+
+        .avatar { width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(145deg, #ffc4d8, #7b6bd0); }
+
+        .comment-name { color: #5d5267; font-size: 12px; font-weight: 700; }
+        .comment-text { margin-top: 5px; color: #777080; font-size: 13px; }
+        .more { color: #9c91a6; font-size: 18px; line-height: 1; }
+
+        .comment-menu {
+            position: absolute;
+            right: 16px;
+            top: 48px;
+            width: 170px;
+            padding: 8px;
+            border-radius: 12px;
+            background: #fff;
+            box-shadow: 0 15px 28px rgba(38, 23, 48, 0.17);
+        }
+
+        .comment-menu div { padding: 7px 8px; color: #716879; font-size: 12px; }
+        .comment-menu .selected { color: var(--pink-deep); background: var(--pink-pale); font-weight: 700; }
+
+        .two-clicks {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 18px;
+        }
+
+        .click-pill {
+            padding: 6px 10px;
+            border-radius: 999px;
+            color: var(--violet-deep);
+            background: var(--violet-pale);
+            font-size: 12px;
+        }
+
+        .result-box {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 14px;
+            margin-top: 24px;
+        }
+
+        .result-box div {
+            padding: 18px;
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: #fff;
+        }
+
+        .result-box strong { display: block; margin-bottom: 5px; font-size: 14px; }
+        .result-box span { color: var(--muted); font-size: 13px; }
+
+        .faq {
+            max-width: 820px;
+            margin: 0 auto;
+        }
+
+        details {
+            border-top: 1px solid var(--line);
+            padding: 17px 0;
+        }
+
+        details:last-child { border-bottom: 1px solid var(--line); }
+        summary { cursor: pointer; font-weight: 700; }
+        details p { max-width: 720px; margin: 10px 0 0; color: var(--muted); font-size: 14px; }
+
+        .site-footer {
+            padding: 34px 0 45px;
+            border-top: 1px solid var(--line);
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .footer-inner { display: flex; justify-content: space-between; gap: 20px; }
+        .footer-inner a { color: var(--pink-deep); text-decoration: none; }
+
+        :focus-visible { outline: 3px solid rgba(220, 71, 121, 0.45); outline-offset: 4px; }
+
+        @media (max-width: 820px) {
+            .hero-grid, .guide-panel, .section-intro { grid-template-columns: 1fr; gap: 26px; }
+            .flow-line { grid-template-columns: repeat(5, minmax(130px, 1fr)); overflow-x: auto; padding-bottom: 8px; }
+            .flow-node::after { display: none; }
+            .result-box { grid-template-columns: 1fr; }
+        }
+
+        @media (max-width: 560px) {
+            .shell { width: min(100% - 28px, 1120px); }
+            .header-links a:nth-child(2), .header-links a:nth-child(3) { display: none; }
+            .hero { padding: 54px 0 52px; }
+            .hero-card, .guide-panel { padding: 20px; }
+            .window-body, .comment-stage, .badge-stage { padding: 18px; }
+            .footer-inner { display: grid; gap: 8px; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            html { scroll-behavior: auto; }
+            *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+        }
+    </style>
+</head>
+
+<body>
+    <header class="site-header">
+        <div class="shell header-inner">
+            <a class="brand" href="../">
+                <span class="brand-mark">V</span>
+                <span>VideoAdGuard</span>
+            </a>
+            <nav class="header-links" aria-label="页面导航">
+                <a href="#ad-feedback">广告反馈</a>
+                <a href="#script-feedback">AI 文案</a>
+                <a href="#comment-feedback">AI 评论</a>
+                <a href="https://github.com/ZeroTang05/VideoAdGuard" target="_blank" rel="noreferrer">GitHub</a>
+            </nav>
+        </div>
+    </header>
+
+    <section class="hero">
+        <div class="shell hero-grid">
+            <div>
+                <h1>VideoAdGuard 使用教程</h1>
+                <p>从检测到反馈，完整了解广告、AI 文案和 AI 评论三类功能。点击后的页面结果会立即更新，社区同步在后台完成。</p>
+                <div class="quick-nav" aria-label="教程章节">
+                    <a href="#ad-feedback">广告检测</a>
+                    <a href="#script-feedback">AI 文案</a>
+                    <a href="#comment-feedback">AI 评论</a>
+                    <a href="#faq">常见问题</a>
+                </div>
+            </div>
+            <div class="hero-card" aria-label="使用流程">
+                <div class="hero-card-title"><span>开始使用</span><span>VideoAdGuard</span></div>
+                <div class="hero-flow">
+                    <div class="hero-step"><b>1</b><span>安装浏览器扩展并打开设置</span></div>
+                    <div class="hero-step"><b>2</b><span>配置模型或 API 服务</span></div>
+                    <div class="hero-step"><b>3</b><span>打开 B 站视频，等待检测结果</span></div>
+                    <div class="hero-step"><b>4</b><span>按需提交三类反馈</span></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <main class="shell">
+        <section class="flow-line" aria-label="使用流程">
+            <div class="flow-node"><strong>安装</strong><span>从商店安装扩展</span></div>
+            <div class="flow-node"><strong>配置</strong><span>选择模型和 API</span></div>
+            <div class="flow-node"><strong>检测</strong><span>打开 B 站视频</span></div>
+            <div class="flow-node"><strong>查看</strong><span>读取标记和角标</span></div>
+            <div class="flow-node"><strong>反馈</strong><span>修正并共享结果</span></div>
+        </section>
+
+        <section class="guide-section" id="ad-feedback">
+            <div class="section-intro">
+                <h2>广告检测与反馈</h2>
+                <p>插件会分析视频字幕。无字幕视频可以使用音频识别。检测完成后，广告区间会显示在进度条上，并提供跳过按钮。</p>
+            </div>
+            <div class="guide-panel">
+                <div class="guide-copy">
+                    <h3>修正时间段，再提交反馈</h3>
+                    <p>你可以先检查红色区间，再决定是否提交反馈。</p>
+                    <ol class="steps">
+                        <li>点击「跳过广告」可以直接跳到当前广告区间末尾。</li>
+                        <li>点击红色区间可以切换该区间的启用状态。</li>
+                        <li>拖动区间边缘可以调整开始和结束时间。</li>
+                        <li>拖动区间中间可以移动整段广告。</li>
+                        <li>确认结果后点击播放器右下角的「✗」反馈按钮。</li>
+                    </ol>
+                    <div class="note">没有调整区间时，反馈会标记当前检测结果不准确。调整后提交会把修正后的时间段共享给其他用户。</div>
+                </div>
+                <div class="demo-window" aria-label="广告检测界面示意">
+                    <div class="window-bar"><span class="window-dot"></span><span class="window-dot"></span><span class="window-dot"></span><span>播放器控制区</span></div>
+                    <div class="window-body">
+                        <span class="range-label">检测到广告区间 04:12 - 05:08</span>
+                        <div class="timeline"><span class="ad-range"></span></div>
+                        <div class="player-actions"><span class="fake-button outline">✗ 反馈</span><span class="fake-button">跳过广告</span></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="guide-section" id="script-feedback">
+            <div class="section-intro">
+                <h2>AI 文案检测与反馈</h2>
+                <p>AI 感评分或人工标注会显示在视频信息区域。人工标注用于记录你对文案是否疑似 AI 生成的判断。</p>
+            </div>
+            <div class="guide-panel">
+                <div class="badge-stage" aria-label="AI 文案标注界面示意">
+                    <div class="info-row">
+                        <small>视频信息</small>
+                        <div class="info-title"><span>视频标题和分 P 信息</span><span class="label-badge">疑似 AI 文案</span></div>
+                        <div class="menu">
+                            <div class="menu-label">文案标注</div>
+                            <div class="menu-item selected">疑似 AI 文案</div>
+                            <div class="menu-item">非 AI 文案</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="guide-copy">
+                    <h3>两步完成一次标注</h3>
+                    <p>标注结果会立即出现在当前页面。本地结果会保存，云端同步在后台进行。</p>
+                    <ol class="steps">
+                        <li>在视频信息区域找到「标注」按钮。</li>
+                        <li>选择「疑似 AI 文案」或「非 AI 文案」。</li>
+                        <li>需要修正时，点击当前角标旁的「修改」。</li>
+                        <li>为当前分 P 选择新的标注，页面会立即切换。</li>
+                    </ol>
+                    <div class="note">人工标注优先于 AI 感评分。后续打开同一分 P 时，会先显示你保存的本地标注。</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="guide-section" id="comment-feedback">
+            <div class="section-intro">
+                <h2>AI 评论检测与反馈</h2>
+                <p>评论屏蔽入口放在 B 站原生评论菜单中。提交不需要登录，不需要输入理由，也不需要填写 UID。</p>
+            </div>
+            <div class="guide-panel">
+                <div class="guide-copy">
+                    <h3>两次鼠标点击完成提交</h3>
+                    <p>入口沿用评论自身的「⋯」菜单，位置稳定，也不会占用评论内容区域。</p>
+                    <ol class="steps">
+                        <li>打开目标评论右侧的「⋯」菜单。</li>
+                        <li>点击菜单底部的「疑似 AI 评论」。</li>
+                        <li>当前作者的评论会立即折叠。</li>
+                        <li>首次有效提交会立即进入共享名单。</li>
+                    </ol>
+                    <div class="two-clicks"><span class="click-pill">点击 1 · ⋯</span><span class="click-pill">点击 2 · 疑似 AI 评论</span></div>
+                    <div class="note">屏蔽按评论作者 UID 生效。折叠主评论时，其他用户的楼中楼回复会保留。</div>
+                </div>
+                <div class="comment-stage" aria-label="AI 评论标记界面示意">
+                    <div class="comment-row">
+                        <span class="avatar" aria-hidden="true"></span>
+                        <div><div class="comment-name">评论用户</div><div class="comment-text">这是一条评论内容，右上角可以打开处理菜单。</div></div>
+                        <span class="more">⋯</span>
+                        <div class="comment-menu">
+                            <div>复制评论链接</div>
+                            <div>加入黑名单</div>
+                            <div>举报</div>
+                            <div class="selected">疑似 AI 评论</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="guide-section" id="feedback-result">
+            <div class="section-intro">
+                <h2>反馈会发生什么</h2>
+                <p>所有反馈都会先更新当前页面，再在后台完成本地保存和云端同步。</p>
+            </div>
+            <div class="result-box">
+                <div><strong>广告</strong><span>提交当前广告区间或你的修正区间。</span></div>
+                <div><strong>AI 文案</strong><span>保存当前分 P 的人工文案判断。</span></div>
+                <div><strong>AI 评论</strong><span>屏蔽作者 UID，并立即加入共享名单。</span></div>
+            </div>
+        </section>
+
+        <section class="guide-section" id="faq">
+            <div class="section-intro">
+                <h2>常见问题</h2>
+                <p>遇到界面没有出现时，先检查扩展是否启用，再查看浏览器控制台中的错误信息。</p>
+            </div>
+            <div class="faq">
+                <details>
+                    <summary>为什么看不到广告反馈按钮？</summary>
+                    <p>广告检测完成后按钮才会出现。你可以等待检测结束，或检查模型 API 是否已经配置并可用。</p>
+                </details>
+                <details>
+                    <summary>为什么 AI 文案没有显示？</summary>
+                    <p>AI 文案功能需要先读到评分或人工标注结果。视频信息区域出现「标注」入口后即可提交人工判断。</p>
+                </details>
+                <details>
+                    <summary>AI 评论提交后需要再次确认吗？</summary>
+                    <p>不需要。点击「疑似 AI 评论」后当前页面会立即折叠该作者的评论，云端同步在后台完成。</p>
+                </details>
+                <details>
+                    <summary>反馈失败会影响当前页面吗？</summary>
+                    <p>当前页面的反馈结果会先显示。云端请求失败时，当前页面的广告修正、AI 文案标注或评论屏蔽仍然保留。</p>
+                </details>
+            </div>
+        </section>
+    </main>
+
+    <footer class="site-footer">
+        <div class="shell footer-inner">
+            <span>VideoAdGuard · B 站视频检测与社区反馈</span>
+            <span><a href="../">返回首页</a> · <a href="../privacy/">隐私政策</a> · <a href="https://github.com/ZeroTang05/VideoAdGuard" target="_blank" rel="noreferrer">GitHub</a></span>
+        </div>
+    </footer>
+</body>
+
+</html>
