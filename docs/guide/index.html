@@ -78,8 +78,7 @@
             height: 36px;
             border-radius: 12px;
             color: #fff;
-            background: linear-gradient(145deg, var(--pink), var(--violet));
-            box-shadow: 0 7px 18px rgba(220, 71, 121, 0.25);
+            background: #fff;
             font-family: "DM Sans", sans-serif;
             font-size: 17px;
         }
@@ -101,6 +100,16 @@
 
         .header-links a { text-decoration: none; }
         .header-links a:hover { color: var(--pink-deep); }
+
+        .home-link {
+            padding: 7px 12px;
+            border: 1px solid #efbfd0;
+            border-radius: 999px;
+            color: var(--pink-deep);
+            background: #fff;
+        }
+
+        .home-link:hover { border-color: var(--pink-deep); }
 
         .hero {
             position: relative;
@@ -361,6 +370,49 @@
 
         .window-body { padding: 25px; }
 
+        .video-screen {
+            position: relative;
+            height: 116px;
+            overflow: hidden;
+            border-radius: 11px;
+            background:
+                linear-gradient(140deg, rgba(255, 255, 255, 0.09), transparent 42%),
+                linear-gradient(120deg, #302653, #584272 60%, #2d2552);
+        }
+
+        .video-screen::before {
+            content: "正在播放视频画面";
+            position: absolute;
+            left: 18px;
+            top: 15px;
+            color: rgba(255, 255, 255, 0.62);
+            font-size: 12px;
+        }
+
+        .video-screen::after {
+            content: "▶";
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            display: grid;
+            place-items: center;
+            width: 38px;
+            height: 38px;
+            transform: translate(-50%, -50%);
+            border: 1px solid rgba(255, 255, 255, 0.55);
+            border-radius: 50%;
+            color: #fff;
+            background: rgba(31, 22, 68, 0.45);
+            font-size: 14px;
+        }
+
+        .player-toolbar {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin: 14px 0 8px;
+        }
+
         .timeline {
             position: relative;
             height: 36px;
@@ -475,10 +527,12 @@
         .menu-item.selected { color: var(--pink-deep); background: var(--pink-pale); font-weight: 700; }
 
         .comment-stage {
-            min-height: 285px;
+            min-height: 390px;
             padding: 24px;
             background: #f5f2f7;
         }
+
+        .comment-list { display: grid; gap: 10px; }
 
         .comment-row {
             position: relative;
@@ -492,11 +546,15 @@
             background: #fff;
         }
 
+        .comment-row.featured { z-index: 2; }
+
         .avatar { width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(145deg, #ffc4d8, #7b6bd0); }
 
         .comment-name { color: #5d5267; font-size: 12px; font-weight: 700; }
         .comment-text { margin-top: 5px; color: #777080; font-size: 13px; }
         .more { color: #9c91a6; font-size: 18px; line-height: 1; }
+
+        .comment-meta { margin-top: 5px; color: #aaa0ae; font-size: 11px; }
 
         .comment-menu {
             position: absolute;
@@ -601,6 +659,7 @@
                 <span>VideoAdGuard</span>
             </a>
             <nav class="header-links" aria-label="页面导航">
+                <a class="home-link" href="../">返回首页</a>
                 <a href="#ad-feedback">广告反馈</a>
                 <a href="#script-feedback">AI 文案</a>
                 <a href="#comment-feedback">AI 评论</a>
@@ -663,9 +722,10 @@
                 <div class="demo-window" aria-label="广告检测界面示意">
                     <div class="window-bar"><span class="window-dot"></span><span class="window-dot"></span><span class="window-dot"></span><span>播放器控制区</span></div>
                     <div class="window-body">
+                        <div class="video-screen"></div>
                         <span class="range-label">检测到广告区间 04:12 - 05:08</span>
+                        <div class="player-toolbar"><span class="fake-button">跳过广告</span><span class="fake-button outline">×</span></div>
                         <div class="timeline"><span class="ad-range"></span></div>
-                        <div class="player-actions"><span class="fake-button outline">✗ 反馈</span><span class="fake-button">跳过广告</span></div>
                     </div>
                 </div>
             </div>
@@ -721,15 +781,32 @@
                     <div class="note">屏蔽按评论作者 UID 生效。折叠主评论时，其他用户的楼中楼回复会保留。</div>
                 </div>
                 <div class="comment-stage" aria-label="AI 评论标记界面示意">
-                    <div class="comment-row">
-                        <span class="avatar" aria-hidden="true"></span>
-                        <div><div class="comment-name">评论用户</div><div class="comment-text">这是一条评论内容，右上角可以打开处理菜单。</div></div>
-                        <span class="more">⋯</span>
-                        <div class="comment-menu">
-                            <div>复制评论链接</div>
-                            <div>加入黑名单</div>
-                            <div>举报</div>
-                            <div class="selected">疑似 AI 评论</div>
+                    <div class="comment-list">
+                        <div class="comment-row featured">
+                            <span class="avatar" aria-hidden="true"></span>
+                            <div><div class="comment-name">评论用户</div><div class="comment-text">这是一条评论内容，右上角可以打开处理菜单。</div><div class="comment-meta">刚刚 · 回复</div></div>
+                            <span class="more">⋯</span>
+                            <div class="comment-menu">
+                                <div>复制评论链接</div>
+                                <div>加入黑名单</div>
+                                <div>举报</div>
+                                <div class="selected">疑似 AI 评论</div>
+                            </div>
+                        </div>
+                        <div class="comment-row">
+                            <span class="avatar" aria-hidden="true"></span>
+                            <div><div class="comment-name">认真看视频</div><div class="comment-text">这个时间点的内容很有帮助。</div><div class="comment-meta">2 分钟前 · 回复</div></div>
+                            <span class="more">⋯</span>
+                        </div>
+                        <div class="comment-row">
+                            <span class="avatar" aria-hidden="true"></span>
+                            <div><div class="comment-name">路过的观众</div><div class="comment-text">收藏了，之后再回来看看。</div><div class="comment-meta">5 分钟前 · 回复</div></div>
+                            <span class="more">⋯</span>
+                        </div>
+                        <div class="comment-row">
+                            <span class="avatar" aria-hidden="true"></span>
+                            <div><div class="comment-name">视频爱好者</div><div class="comment-text">评论区交流一下你的看法。</div><div class="comment-meta">8 分钟前 · 回复</div></div>
+                            <span class="more">⋯</span>
                         </div>
                     </div>
                 </div>
