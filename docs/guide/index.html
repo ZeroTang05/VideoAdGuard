@@ -344,6 +344,9 @@
         }
 
         .demo-window {
+            display: flex;
+            align-self: stretch;
+            flex-direction: column;
             overflow: hidden;
             min-height: 285px;
             border: 1px solid #2c244f;
@@ -368,11 +371,18 @@
         .window-dot:nth-child(2) { background: #ffc66e; }
         .window-dot:nth-child(3) { background: #73d4ad; }
 
-        .window-body { padding: 25px; }
+        .window-body {
+            display: flex;
+            flex: 1;
+            min-height: 0;
+            padding: 25px;
+        }
 
         .video-screen {
             position: relative;
+            flex: 1;
             height: 116px;
+            min-height: 116px;
             overflow: hidden;
             border-radius: 11px 11px 5px 5px;
             background:
@@ -408,6 +418,10 @@
 
         .player-frame {
             position: relative;
+            display: flex;
+            flex: 1;
+            min-height: 0;
+            flex-direction: column;
         }
 
         .player-toolbar {
@@ -423,6 +437,7 @@
 
         .timeline {
             position: relative;
+            flex: 0 0 36px;
             height: 36px;
             margin: 0;
             border-radius: 5px 5px 9px 9px;
