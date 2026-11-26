@@ -12,6 +12,8 @@ import {
 } from './video-card-scenarios';
 import { getVideoCardScenarios } from '../utils/video-page';
 import { aiScriptLabelText } from '../utils/script-result';
+import { loadFeatureFlags } from '../utils/feature-flags';
+import type { FeatureFlags } from '../utils/feature-flags';
 
 const BADGE_CONTAINER_CLASS = 'vag-home-badges10032';
 const BADGE_SELECTOR = '.' + BADGE_CONTAINER_CLASS;
@@ -84,6 +86,15 @@ class VagCardObserver {
     this.visibilityObserver.disconnect();
     for (const card of this.cards.values()) this.release(card);
     this.cards.clear();
+  }
+
+  refresh(): void {
+    for (const card of this.cards.values()) {
+      card.badge?.element.remove();
+      card.badge = null;
+      card.anchorDirty = true;
+      this.updateCard(card);
+    }
   }
 
   private handleMutation(mutation: MutationRecord): void {
@@ -174,16 +185,70 @@ export class VideoCardAnnotator {
   private static lastRequestAt = -Infinity;
   private static retryAt = -Infinity;
   private static failures = 0;
+  private static refreshInterval: number | null = null;
+  private static refreshPromise: Promise<void> | null = null;
+  private static featureFlags: FeatureFlags = {
+    enableAdDetection: true,
+    enableAiDetection: true,
+    pluginEnabled: true,
+  };
 
   public static async start(): Promise<void> {
-    if (this.started) return;
-    const settings = await chrome.storage.local.get(['enableExtension']);
-    if (settings.enableExtension === false || this.started) return;
+    await this.refresh();
+  }
+
+  public static async refresh(): Promise<void> {
+    if (this.refreshPromise) return this.refreshPromise;
+    this.refreshPromise = this.refreshInternal().finally(() => {
+      this.refreshPromise = null;
+    });
+    return this.refreshPromise;
+  }
+
+  private static async refreshInternal(): Promise<void> {
+    const featureFlags = await loadFeatureFlags();
+    if (!featureFlags.pluginEnabled || getVideoCardScenarios(location.href).length === 0) {
+      this.stop();
+      return;
+    }
+
+    const flagsChanged = this.featureFlags.enableAdDetection !== featureFlags.enableAdDetection
+      || this.featureFlags.enableAiDetection !== featureFlags.enableAiDetection;
+    this.featureFlags = featureFlags;
+
+    if (this.started) {
+      if (flagsChanged) {
+        for (const observer of this.observedContainers.values()) observer.refresh();
+      }
+      return;
+    }
 
     this.started = true;
     this.refreshContainers();
     // 只检查场景和容器是否换了；沿用现有容器时不会重新遍历卡片。
-    window.setInterval(() => this.refreshContainers(), 3000);
+    this.refreshInterval = window.setInterval(() => this.refreshContainers(), 3000);
+  }
+
+  public static stop(): void {
+    if (this.refreshInterval !== null) {
+      window.clearInterval(this.refreshInterval);
+      this.refreshInterval = null;
+    }
+    if (this.rescanTimer !== null) {
+      window.clearTimeout(this.rescanTimer);
+      this.rescanTimer = null;
+    }
+    if (this.renderFrame !== null) {
+      window.cancelAnimationFrame(this.renderFrame);
+      this.renderFrame = null;
+    }
+    for (const observer of this.observedContainers.values()) observer.disconnect();
+    this.observedContainers.clear();
+    this.waiting.clear();
+    this.dirtyCards.clear();
+    this.results.clear();
+    this.started = false;
+    this.clearFlushTimer();
   }
 
   /** SPA 换页或容器加载较晚时发现新容器，已有容器继续增量观察。 */
@@ -354,7 +419,8 @@ export class VideoCardAnnotator {
       this.retryAt = -Infinity;
       for (const bvid of bvids) {
         const item = data[bvid];
-        const hasBadge = item?.ad?.exist || item?.aiScript || typeof item?.aiScriptLabel === 'boolean';
+        const hasBadge = (this.featureFlags.enableAdDetection && item?.ad?.exist)
+          || (this.featureFlags.pluginEnabled && (item?.aiScript || typeof item?.aiScriptLabel === 'boolean'));
         this.results.set(bvid, hasBadge ? item : null);
         const cards = this.waiting.get(bvid);
         this.waiting.delete(bvid);
@@ -374,7 +440,7 @@ export class VideoCardAnnotator {
   private static buildBadgeContainer(item: RemoteBatchItem): HTMLElement | null {
     const labels: Array<{ text: string; color: string; title: string }> = [];
 
-    if (item.ad?.exist) {
+    if (this.featureFlags.enableAdDetection && item.ad?.exist) {
       const goods = (item.ad.goodName || []).filter(Boolean);
       const title = goods.length ? `检测到广告：${goods.join('、')}` : '检测到植入广告';
       labels.push({
@@ -385,13 +451,13 @@ export class VideoCardAnnotator {
     }
 
     const ai = item.aiScript;
-    if (typeof item.aiScriptLabel === 'boolean') {
+    if (this.featureFlags.pluginEnabled && typeof item.aiScriptLabel === 'boolean') {
       labels.push({
         text: aiScriptLabelText(item.aiScriptLabel),
         color: item.aiScriptLabel ? '#f25d8e' : '#9499a0',
         title: '人工标注',
       });
-    } else if (ai) {
+    } else if (this.featureFlags.pluginEnabled && ai) {
       labels.push({
         text: `AI 感 ${ai.aiScore}`,
         color: ai.aiScore >= 70 ? '#f25d8e' : ai.aiScore >= 40 ? '#ff7f24' : '#9499a0',

@@ -5,6 +5,7 @@ import {
   COMMENT_IDENTITY_EVENT, COMMENT_IDENTITY_REQUEST, COMMENT_INDEX_EVENT, COMMENT_MENU_CLOSE_EVENT, COMMENT_RULES_EVENT,
   CommentIdentity, commentId,
 } from './utils/comment-replies';
+import { loadFeatureFlags } from './utils/feature-flags';
 
 const LOCAL_PREFIX = 'aiCommentBlocked:';
 const SHARED_KEY = 'aiCommentSharedUids';
@@ -251,17 +252,20 @@ async function submit(row: HTMLElement): Promise<void> {
 /** 初次打开使用本机名单，同时获取云端已发布的 UID。 */
 void (async () => {
   const stored = await chrome.storage.local.get(null);
-  enabled = stored.enableExtension !== false;
+  enabled = (await loadFeatureFlags()).enableAiDetection;
   local = new Set(Object.keys(stored).filter(key => key.startsWith(LOCAL_PREFIX) && stored[key] === true)
     .map(key => key.slice(LOCAL_PREFIX.length)));
   shared = new Set(Array.isArray(stored[SHARED_KEY]) ? stored[SHARED_KEY] : []);
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
     let refresh = false;
-    if (changes.enableExtension) {
-      enabled = changes.enableExtension.newValue !== false;
-      if (enabled) void syncShared();
-      refresh = true;
+    if (changes.enableExtension || changes.enableAdDetection || changes.enableAiDetection) {
+      void loadFeatureFlags().then((flags) => {
+        const changed = enabled !== flags.enableAiDetection;
+        enabled = flags.enableAiDetection;
+        if (enabled) void syncShared();
+        if (changed || changes.enableAdDetection || changes.enableExtension) publishRules();
+      });
     }
     if (changes[SHARED_KEY]) {
       shared = new Set(changes[SHARED_KEY].newValue ?? []);

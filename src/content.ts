@@ -13,6 +13,7 @@ import { normalizeErrorForUser } from './utils/errors';
 import { sampleScriptText } from './utils/script-samples';
 import { parseAiStyleScore } from './utils/script-result';
 import { VideoCardAnnotator } from './services/video-card-annotator';
+import { loadFeatureFlags } from './utils/feature-flags';
 import { getVideoCardScenarios, isBilibiliVideoPage } from './utils/video-page';
 
 /** 广告检测和文案评分共用当前播放分 P 的上下文。 */
@@ -1448,19 +1449,24 @@ class AIScriptDetector {
 // 消息监听器：
 chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   if (request.type === 'GET_AD_INFO') {
-    let bvid: string | null = null;
-    try {
-      bvid = AdDetector.getBvidFromUrl();
-    } catch {
-      bvid = null;
-    }
-    sendResponse({
-      adInfo: AdDetector.adDetectionResult || '广告检测尚未完成',
-      adTimeRanges: AdDetector.getAdTimeRanges(),
-      userModified: AdDetector.getUserModifiedSegments(),
-      bvid,
-      timestamp: Date.now()
+    void loadFeatureFlags().then((featureFlags) => {
+      let bvid: string | null = null;
+      try {
+        bvid = AdDetector.getBvidFromUrl();
+      } catch {
+        bvid = null;
+      }
+      sendResponse({
+        adInfo: featureFlags.enableAdDetection
+          ? (AdDetector.adDetectionResult || '广告检测尚未完成')
+          : '广告检测未开启',
+        adTimeRanges: AdDetector.getAdTimeRanges(),
+        userModified: AdDetector.getUserModifiedSegments(),
+        bvid,
+        timestamp: Date.now()
+      });
     });
+    return true;
   }
 });
 
@@ -1469,9 +1475,9 @@ let lastUrl = '';
 let activeRoute: { bvid: string; page: number; controller: AbortController } | null = null;
 let videoInfoRequest: { bvid: string; info: ReturnType<typeof BilibiliService.getVideoInfo> } | undefined;
 
-async function refreshVideoPage() {
+async function refreshVideoPage(force = false) {
   const url = location.href;
-  if (lastUrl === url) return;
+  if (!force && lastUrl === url) return;
   lastUrl = url;
 
   let route: { bvid: string; page: number } | undefined;
@@ -1485,7 +1491,7 @@ async function refreshVideoPage() {
       }
     }
   }
-  if (activeRoute && route?.bvid === activeRoute.bvid && route.page === activeRoute.page) return;
+  if (!force && activeRoute && route?.bvid === activeRoute.bvid && route.page === activeRoute.page) return;
 
   activeRoute?.controller.abort();
   if (activeRoute) {
@@ -1493,9 +1499,17 @@ async function refreshVideoPage() {
     AIScriptDetector.clear();
   }
   activeRoute = null;
+  const featureFlags = await loadFeatureFlags();
+  if (!featureFlags.pluginEnabled) {
+    if (!route) {
+      videoInfoRequest = undefined;
+      void VideoCardAnnotator.refresh();
+    }
+    return;
+  }
   if (!route) {
     videoInfoRequest = undefined;
-    if (getVideoCardScenarios(url).length > 0) VideoCardAnnotator.start();
+    if (getVideoCardScenarios(url).length > 0) void VideoCardAnnotator.refresh();
     return;
   }
 
@@ -1505,8 +1519,7 @@ async function refreshVideoPage() {
   activeRoute = { ...route, controller };
 
   try {
-    const { enableExtension } = await chrome.storage.local.get(['enableExtension']);
-    if (signal.aborted || enableExtension === false) return;
+    if (signal.aborted) return;
     if (videoInfoRequest?.bvid !== bvid) {
       videoInfoRequest = { bvid, info: BilibiliService.getVideoInfo(bvid) };
     }
@@ -1516,7 +1529,8 @@ async function refreshVideoPage() {
     const part = BilibiliService.resolveVideoPart(bvid, page, info);
     console.log(`【VideoAdGuard】当前分 P: ${bvid} P${page}（cid ${part.cid}）`);
     const run = { part, info, signal };
-    void AdDetector.analyze(run);
+    if (featureFlags.enableAdDetection) void AdDetector.analyze(run);
+    else AdDetector.clear();
     void AIScriptDetector.analyze(run);
   } catch (error) {
     if (signal.aborted) return;
@@ -1525,6 +1539,17 @@ async function refreshVideoPage() {
     console.warn('【VideoAdGuard】未能加载当前分 P:', error);
   }
 }
+
+let featureRefreshTimer: number | null = null;
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !('enableExtension' in changes || 'enableAdDetection' in changes || 'enableAiDetection' in changes)) return;
+  if (featureRefreshTimer !== null) return;
+  featureRefreshTimer = window.setTimeout(() => {
+    featureRefreshTimer = null;
+    void refreshVideoPage(true);
+    void VideoCardAnnotator.refresh();
+  }, 0);
+});
 
 function onVideoPageChange() {
   void refreshVideoPage();

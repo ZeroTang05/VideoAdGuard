@@ -6,6 +6,7 @@ import { LLMProvider, StoredLLMSettings } from './services/llm/types';
 import { normalizeErrorForUser } from './utils/errors';
 import { DEBUG_MODE_STORAGE_KEY } from './utils/logger';
 import { isBilibiliVideoPage } from './utils/video-page';
+import { resolveFeatureFlags } from './utils/feature-flags';
 import { findSystemOnePreset, SYSTEM_ONE_PRESETS } from './services/llm/system-one-presets';
 import {
   decryptSecret,
@@ -96,7 +97,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const modelInput = document.getElementById('model') as HTMLInputElement;
   const messageDiv = document.getElementById('message') as HTMLDivElement;
   const resultDiv = document.getElementById('result') as HTMLDivElement;
-  const enableExtensionCheckbox = document.getElementById('enableExtension') as HTMLInputElement;
+  const enableAdDetectionCheckbox = document.getElementById('enableAdDetection') as HTMLInputElement;
+  const enableAiDetectionCheckbox = document.getElementById('enableAiDetection') as HTMLInputElement;
   const autoSkipAdCheckbox = document.getElementById('autoSkipAd') as HTMLInputElement;
   const restrictedModeCheckbox = document.getElementById('restrictedMode') as HTMLInputElement;
   const togglePasswordBtn = document.getElementById('toggleApiKey') as HTMLInputElement;
@@ -111,7 +113,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const baseUrlDropdownMenu = document.getElementById('baseUrlDropdownMenu') as HTMLDivElement;
   const titleElement = document.querySelector('h3') as HTMLHeadingElement | null;
 
-  enableExtensionCheckbox.checked = true;
+  enableAdDetectionCheckbox.checked = true;
+  enableAiDetectionCheckbox.checked = true;
   autoSkipAdCheckbox.checked = true;
 
   let apiKeysByBaseUrl: Record<string, string> = {};
@@ -133,6 +136,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       }, autoHideMs);
     }
+  }
+
+  function updateAdDetectionControls(): void {
+    const enabled = enableAdDetectionCheckbox.checked;
+    autoSkipAdCheckbox.disabled = !enabled;
+    restrictedModeCheckbox.disabled = !enabled;
   }
 
   function getSelectedProvider(): LLMProvider {
@@ -246,7 +255,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const apiUrl = baseUrl ? buildApiUrl(provider, baseUrl) : '';
     const apiKey = apiKeyInput.value.trim();
     const model = modelInput.value.trim();
-    const enableExtension = enableExtensionCheckbox.checked;
+    const enableAdDetection = enableAdDetectionCheckbox.checked;
+    const enableAiDetection = enableAiDetectionCheckbox.checked;
     const enableLocalOllama = provider === 'custom_fetch';
     const autoSkipAd = autoSkipAdCheckbox.checked;
     const restrictedMode = restrictedModeCheckbox.checked;
@@ -274,7 +284,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         apiKeysByBaseUrl: encryptedApiKeysByBaseUrl,
         model,
         modelsByBaseUrl,
-        enableExtension,
+        enableExtension: enableAdDetection || enableAiDetection,
+        enableAdDetection,
+        enableAiDetection,
         enableLocalOllama,
         autoSkipAd,
         restrictedMode,
@@ -298,7 +310,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   const allCheckboxes = [
-    enableExtensionCheckbox,
+    enableAdDetectionCheckbox,
+    enableAiDetectionCheckbox,
     autoSkipAdCheckbox,
     restrictedModeCheckbox,
     enableAudioTranscriptionCheckbox,
@@ -307,6 +320,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   allCheckboxes.forEach((checkbox) => {
     checkbox.addEventListener('change', () => {
+      updateAdDetectionControls();
       autoSaveSettings();
     });
   });
@@ -469,6 +483,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     'model',
     'modelsByBaseUrl',
     'enableExtension',
+    'enableAdDetection',
+    'enableAiDetection',
     'enableLocalOllama',
     'autoSkipAd',
     'restrictedMode',
@@ -494,6 +510,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   if (Object.keys(migratedSecrets).length > 0) {
     await chrome.storage.local.set(migratedSecrets);
+  }
+
+  const featureFlags = resolveFeatureFlags(settings as Record<string, unknown>);
+  enableAdDetectionCheckbox.checked = featureFlags.enableAdDetection;
+  enableAiDetectionCheckbox.checked = featureFlags.enableAiDetection;
+  updateAdDetectionControls();
+  if (typeof settings.enableAdDetection !== 'boolean' || typeof settings.enableAiDetection !== 'boolean') {
+    await chrome.storage.local.set({
+      enableExtension: featureFlags.pluginEnabled,
+      enableAdDetection: featureFlags.enableAdDetection,
+      enableAiDetection: featureFlags.enableAiDetection,
+    });
   }
 
   const storedBaseUrlsByProvider = settings.baseUrlsByProvider as Partial<Record<LLMProvider, unknown>> | undefined;
@@ -548,7 +576,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   } else if (initialProvider === 'system_one') {
     modelInput.value = findSystemOnePreset(initialBaseUrl)?.defaultModel || '';
   }
-  if (typeof settings.enableExtension === 'boolean') enableExtensionCheckbox.checked = settings.enableExtension;
   if (typeof settings.autoSkipAd === 'boolean') autoSkipAdCheckbox.checked = settings.autoSkipAd;
   if (settings.restrictedMode) restrictedModeCheckbox.checked = settings.restrictedMode;
   debugModeEnabled = settings[DEBUG_MODE_STORAGE_KEY] === true;

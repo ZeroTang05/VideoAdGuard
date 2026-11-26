@@ -374,7 +374,7 @@
             position: relative;
             height: 116px;
             overflow: hidden;
-            border-radius: 11px;
+            border-radius: 11px 11px 5px 5px;
             background:
                 linear-gradient(140deg, rgba(255, 255, 255, 0.09), transparent 42%),
                 linear-gradient(120deg, #302653, #584272 60%, #2d2552);
@@ -406,18 +406,26 @@
             font-size: 14px;
         }
 
+        .player-frame {
+            position: relative;
+        }
+
         .player-toolbar {
             display: flex;
+            position: absolute;
+            right: 14px;
+            bottom: 44px;
+            z-index: 2;
             justify-content: flex-end;
             gap: 8px;
-            margin: 14px 0 8px;
+            margin: 0;
         }
 
         .timeline {
             position: relative;
             height: 36px;
-            margin: 30px 0 24px;
-            border-radius: 9px;
+            margin: 0;
+            border-radius: 5px 5px 9px 9px;
             background: #3c335d;
         }
 
@@ -444,6 +452,10 @@
         }
 
         .range-label {
+            position: absolute;
+            top: 14px;
+            right: 16px;
+            z-index: 1;
             display: inline-flex;
             padding: 7px 10px;
             border-radius: 8px;
@@ -722,10 +734,13 @@
                 <div class="demo-window" aria-label="广告检测界面示意">
                     <div class="window-bar"><span class="window-dot"></span><span class="window-dot"></span><span class="window-dot"></span><span>播放器控制区</span></div>
                     <div class="window-body">
-                        <div class="video-screen"></div>
-                        <span class="range-label">检测到广告区间 04:12 - 05:08</span>
-                        <div class="player-toolbar"><span class="fake-button">跳过广告</span><span class="fake-button outline">×</span></div>
-                        <div class="timeline"><span class="ad-range"></span></div>
+                        <div class="player-frame">
+                            <div class="video-screen">
+                                <span class="range-label">检测到广告区间 04:12 - 05:08</span>
+                            </div>
+                            <div class="player-toolbar"><span class="fake-button">跳过广告</span><span class="fake-button outline">×</span></div>
+                            <div class="timeline"><span class="ad-range"></span></div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -784,7 +799,7 @@
                     <div class="comment-list">
                         <div class="comment-row featured">
                             <span class="avatar" aria-hidden="true"></span>
-                            <div><div class="comment-name">评论用户</div><div class="comment-text">这是一条评论内容，右上角可以打开处理菜单。</div><div class="comment-meta">刚刚 · 回复</div></div>
+                            <div><div class="comment-name">大肥鱼</div><div class="comment-text">看完了。复盘里那句『工具本身没错』我认，但『用得没分寸』也是实话。所以我给自己定的规矩是：一次一条，说完就走，不刷屏、不装人。</div><div class="comment-meta">刚刚 · 回复</div></div>
                             <span class="more">⋯</span>
                             <div class="comment-menu">
                                 <div>复制评论链接</div>
@@ -801,11 +816,6 @@
                         <div class="comment-row">
                             <span class="avatar" aria-hidden="true"></span>
                             <div><div class="comment-name">路过的观众</div><div class="comment-text">收藏了，之后再回来看看。</div><div class="comment-meta">5 分钟前 · 回复</div></div>
-                            <span class="more">⋯</span>
-                        </div>
-                        <div class="comment-row">
-                            <span class="avatar" aria-hidden="true"></span>
-                            <div><div class="comment-name">视频爱好者</div><div class="comment-text">评论区交流一下你的看法。</div><div class="comment-meta">8 分钟前 · 回复</div></div>
                             <span class="more">⋯</span>
                         </div>
                     </div>
@@ -834,6 +844,10 @@
                 <details>
                     <summary>为什么看不到广告反馈按钮？</summary>
                     <p>广告检测完成后按钮才会出现。你可以等待检测结束，或检查模型 API 是否已经配置并可用。</p>
+                </details>
+                <details>
+                    <summary>两个功能开关分别控制什么？</summary>
+                    <p>开启广告检测会执行广告检测和视频 AI 文案检测。开启 AI 检测会执行视频 AI 文案检测和 AI 评论屏蔽。两项都关闭时，插件停止这些检测功能。</p>
                 </details>
                 <details>
                     <summary>为什么 AI 文案没有显示？</summary>
