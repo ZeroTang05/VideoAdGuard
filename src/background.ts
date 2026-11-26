@@ -8,6 +8,7 @@ import { STORAGE_KEYS } from './services/llm/config';
 import { LLMGateway } from './services/llm/providers';
 import { LLMInvokePayload, StoredLLMSettings } from './services/llm/types';
 import { createHttpError, normalizeErrorForUser } from './utils/errors';
+import { decryptSecret, encryptSecret, isEncryptedSecret } from './services/secret-storage';
 
 export {}
 
@@ -199,9 +200,15 @@ class LLMInvokeHandler {
         throw new Error('模型请求参数无效');
       }
 
-      const storedSettings = (await chrome.storage.local.get(
+      const rawStoredSettings = (await chrome.storage.local.get(
         [...STORAGE_KEYS]
       )) as StoredLLMSettings;
+      const apiKey = await decryptSecret(rawStoredSettings.apiKey);
+      const storedSettings = { ...rawStoredSettings, apiKey } as StoredLLMSettings;
+
+      if (rawStoredSettings.apiKey && !isEncryptedSecret(rawStoredSettings.apiKey)) {
+        await chrome.storage.local.set({ apiKey: await encryptSecret(apiKey) });
+      }
 
       const result = await LLMGateway.invoke(
         {

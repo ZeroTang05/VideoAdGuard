@@ -7,6 +7,13 @@ import { normalizeErrorForUser } from './utils/errors';
 import { DEBUG_MODE_STORAGE_KEY } from './utils/logger';
 import { isBilibiliVideoPage } from './utils/video-page';
 import { findSystemOnePreset, SYSTEM_ONE_PRESETS } from './services/llm/system-one-presets';
+import {
+  decryptSecret,
+  decryptSecretMap,
+  encryptSecret,
+  encryptSecretMap,
+  isEncryptedSecret,
+} from './services/secret-storage';
 
 interface BaseUrlPreset {
   name: string;
@@ -254,19 +261,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       persistCurrentProviderBaseUrl(provider);
       persistCurrentBindings();
+      const [encryptedApiKey, encryptedApiKeysByBaseUrl, encryptedGroqApiKey] = await Promise.all([
+        encryptSecret(apiKey),
+        encryptSecretMap(apiKeysByBaseUrl),
+        encryptSecret(groqApiKey),
+      ]);
       const nextSettings: Record<string, unknown> = {
         provider,
         baseUrl,
-        apiKey,
+        apiKey: encryptedApiKey,
         baseUrlsByProvider,
-        apiKeysByBaseUrl,
+        apiKeysByBaseUrl: encryptedApiKeysByBaseUrl,
         model,
         modelsByBaseUrl,
         enableExtension,
         enableLocalOllama,
         autoSkipAd,
         restrictedMode,
-        groqApiKey,
+        groqApiKey: encryptedGroqApiKey,
         enableAudioTranscription,
         enableGroqProxy,
       };
@@ -466,6 +478,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     'enableGroqProxy',
   ]);
 
+  const decryptedApiKey = await decryptSecret(settings.apiKey);
+  const decryptedApiKeysByBaseUrl = await decryptSecretMap(settings.apiKeysByBaseUrl);
+  const decryptedGroqApiKey = await decryptSecret(settings.groqApiKey);
+
+  const migratedSecrets: Record<string, unknown> = {};
+  if (settings.apiKey && !isEncryptedSecret(settings.apiKey)) {
+    migratedSecrets.apiKey = await encryptSecret(decryptedApiKey);
+  }
+  if (settings.apiKeysByBaseUrl) {
+    migratedSecrets.apiKeysByBaseUrl = await encryptSecretMap(decryptedApiKeysByBaseUrl);
+  }
+  if (settings.groqApiKey && !isEncryptedSecret(settings.groqApiKey)) {
+    migratedSecrets.groqApiKey = await encryptSecret(decryptedGroqApiKey);
+  }
+  if (Object.keys(migratedSecrets).length > 0) {
+    await chrome.storage.local.set(migratedSecrets);
+  }
+
   const storedBaseUrlsByProvider = settings.baseUrlsByProvider as Partial<Record<LLMProvider, unknown>> | undefined;
   baseUrlsByProvider = {};
   (['openai', 'anthropic', 'custom_fetch', 'system_one'] as const).forEach((provider) => {
@@ -475,7 +505,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  apiKeysByBaseUrl = settings.apiKeysByBaseUrl || {};
+  apiKeysByBaseUrl = decryptedApiKeysByBaseUrl;
   modelsByBaseUrl = settings.modelsByBaseUrl || {};
   const persistedProvider = settings.provider as StoredLLMSettings['provider'];
   const initialProvider: LLMProvider =
@@ -486,7 +516,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     provider: initialProvider,
     baseUrl: settings.baseUrl,
     apiUrl: settings.apiUrl,
-    apiKey: settings.apiKey,
+    apiKey: decryptedApiKey,
     model: settings.model,
     enableLocalOllama: settings.enableLocalOllama,
   } as StoredLLMSettings);
@@ -500,16 +530,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   baseUrlInput.value = initialBaseUrl;
   activeBaseUrlKey = normalizeCompleteBaseUrl(initialBaseUrl);
-  if (activeBaseUrlKey && settings.apiKey && !apiKeysByBaseUrl[activeBaseUrlKey]) {
-    apiKeysByBaseUrl[activeBaseUrlKey] = settings.apiKey;
+  if (activeBaseUrlKey && decryptedApiKey && !apiKeysByBaseUrl[activeBaseUrlKey]) {
+    apiKeysByBaseUrl[activeBaseUrlKey] = decryptedApiKey;
   }
   if (activeBaseUrlKey && settings.model && !modelsByBaseUrl[activeBaseUrlKey]) {
     modelsByBaseUrl[activeBaseUrlKey] = settings.model;
   }
   if (activeBaseUrlKey && apiKeysByBaseUrl[activeBaseUrlKey]) {
     apiKeyInput.value = apiKeysByBaseUrl[activeBaseUrlKey];
-  } else if (settings.apiKey) {
-    apiKeyInput.value = settings.apiKey;
+  } else if (decryptedApiKey) {
+    apiKeyInput.value = decryptedApiKey;
   }
   if (activeBaseUrlKey && modelsByBaseUrl[activeBaseUrlKey]) {
     modelInput.value = modelsByBaseUrl[activeBaseUrlKey];
@@ -522,7 +552,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (typeof settings.autoSkipAd === 'boolean') autoSkipAdCheckbox.checked = settings.autoSkipAd;
   if (settings.restrictedMode) restrictedModeCheckbox.checked = settings.restrictedMode;
   debugModeEnabled = settings[DEBUG_MODE_STORAGE_KEY] === true;
-  if (settings.groqApiKey) groqApiKeyInput.value = settings.groqApiKey;
+  if (decryptedGroqApiKey) groqApiKeyInput.value = decryptedGroqApiKey;
   if (typeof settings.enableAudioTranscription === 'boolean') {
     enableAudioTranscriptionCheckbox.checked = settings.enableAudioTranscription;
   }

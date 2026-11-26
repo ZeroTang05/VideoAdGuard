@@ -341,7 +341,7 @@
         <div class="page-title fade-in-up">
             <h1>隐私政策</h1>
             <p>VideoAdGuard 致力于保护您的隐私和个人信息安全</p>
-            <p class="last-updated">最后更新：2025年8月15日</p>
+            <p class="last-updated">最后更新：2026年11月26日</p>
         </div>
 
         <div class="content-section fade-in-up">
@@ -362,8 +362,8 @@
                 <li><strong>视频字幕内容：</strong>仅用于分析是否包含植入广告，分析完成后不会永久存储</li>
                 <li><strong>视频音频片段：</strong>在用户启用音频识别功能时，临时提取音频用于转录分析</li>
                 <li><strong>视频基本信息：</strong>如视频ID（BV号）、标题等，用于缓存检测结果</li>
-                <li><strong>被标记的评论作者 UID：</strong>用户主动标记疑似 AI 评论时，共享服务接收该评论作者的公开 B 站 UID，并按 UID 计数。</li>
-                <li><strong>用户配置信息：</strong>您在扩展设置中配置的API密钥、模型选择等</li>
+                <li><strong>视频评论内容：</strong>在您使用评论检测或反馈功能时，扩展会获取当前视频的评论内容，用于提供相应功能。</li>
+                <li><strong>模型选择：</strong>您在扩展设置中选择的模型，用于按您的选择调用相应的 AI 服务。</li>
             </ul>
 
             <h3>2.2 我们不收集的信息</h3>
@@ -372,7 +372,8 @@
                 <li>您的浏览历史记录</li>
                 <li>您的搜索记录</li>
                 <li>您的账户登录信息</li>
-                <li>除广告检测外的其他视频内容</li>
+                <li>您在扩展中配置的 API 密钥</li>
+                <li>与已列明功能无关的其他视频内容</li>
             </ul>
         </div>
 
@@ -445,11 +446,11 @@
             <ul>
                 <li><strong>用户设置：</strong>存储在浏览器本地，不上传到服务器</li>
                 <li><strong>检测缓存：</strong>本地存储24小时，自动过期删除</li>
-                <li><strong>API密钥：</strong>加密存储在本地，不会传输给我们</li>
+                <li><strong>API 密钥：</strong>加密存储在浏览器扩展的本地存储中，不会传给我们</li>
             </ul>
 
             <h3>5.2 第三方服务</h3>
-            <p>当您选择使用音频识别功能时，音频数据会发送至以下服务商：</p>
+            <p>当您启用相应的 AI 分析功能时，相关视频音频、字幕或评论内容会发送至您选择的 AI 服务，用于完成分析。具体处理方式遵循相应服务商的隐私政策。</p>
             <ul>
                 <li><strong>Groq：</strong>用于语音转录服务，符合其隐私政策</li>
                 <li><strong>用户自定义AI服务：</strong>根据您配置的API endpoint</li>
@@ -458,7 +459,7 @@
             <h3>5.3 安全措施</h3>
             <ul>
                 <li>采用HTTPS加密传输</li>
-                <li>API密钥本地加密存储</li>
+                <li>API 密钥在本地加密存储</li>
                 <li>定期清理临时数据</li>
                 <li>不记录用户操作日志</li>
             </ul>
@@ -615,7 +616,7 @@
     <!-- Footer -->
     <footer>
         <div class="container">
-            <p>&copy; 2025 VideoAdGuard. 保留所有权利。</p>
+            <p>&copy; 2026 VideoAdGuard. 保留所有权利。</p>
             <p style="margin-top: 0.5rem; opacity: 0.8;">本隐私政策遵循相关法律法规，致力于保护用户隐私权益。</p>
         </div>
     </footer>

@@ -2,6 +2,8 @@
  * Firefox 专用音频处理（ArrayBuffer -> background）
  */
 
+import { decryptSecret, encryptSecret, isEncryptedSecret } from './secret-storage';
+
 // 音频流信息
 interface AudioStreamInfo {
   bandwidth: number;
@@ -83,7 +85,11 @@ export class AudioService {
     const temp = new Blob([new Uint8Array(bytes)], { type: fileInfo.type || 'application/octet-stream' });
     const type = AudioService.normalizeAudioBlob(temp).type;
 
-    const { groqApiKey: apiKey, enableGroqProxy } = await chrome.storage.local.get(['groqApiKey', 'enableGroqProxy']);
+    const settings = await chrome.storage.local.get(['groqApiKey', 'enableGroqProxy']);
+    const apiKey = await decryptSecret(settings.groqApiKey);
+    if (settings.groqApiKey && !isEncryptedSecret(settings.groqApiKey)) {
+      await chrome.storage.local.set({ groqApiKey: await encryptSecret(apiKey) });
+    }
     if (!apiKey) throw new Error('未配置Groq API密钥，请在设置中配置');
 
     const response = await chrome.runtime.sendMessage({
@@ -95,7 +101,7 @@ export class AudioService {
         options: {
           model: AudioService.DEFAULT_MODEL,
           responseFormat: 'verbose_json',
-          allowProxyFallback: Boolean(enableGroqProxy)
+          allowProxyFallback: Boolean(settings.enableGroqProxy)
         }
       }
     });
